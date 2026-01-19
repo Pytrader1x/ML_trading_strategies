@@ -1,0 +1,19 @@
+# GPU-Optimized Meta-Labeling + RL System Dependencies
+# Requires CUDA 12.1+ and compatible GPU (RTX 4090/5090, A100, etc.)
+
+# Core ML
+torch>=2.2.0
+xgboost>=2.0.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+numba>=0.58.0
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0
+
+# Optional: For Vast.ai integration
+paramiko>=3.0.0
+scp>=0.14.0
