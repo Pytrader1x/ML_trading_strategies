@@ -1,0 +1,57 @@
+# Large backtest outputs
+strategies/*/results/*/*/backtest_report.html
+strategies/*/results/*/*/backtest_chart.html
+
+# Keep these (small and important):
+# - SUMMARY.md
+# - backtest_results.json
+
+# Trades CSV (large, regenerate from backtests)
+strategies/*/results/*/*/trades.csv
+
+# Data files (too large for git)
+data/*.csv
+
+# Archive (old strategies)
+archive/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Monte Carlo outputs (can regenerate)
+strategies/*/results/*/*/mc_*.png
+strategies/*/results/*/*/mc_*.json
+strategies/*/results/*/*/mc_*.html
+
+# All PNG files (regenerate locally)
+strategies/*/results/*/*/*.png
+
+# Portfolio analysis outputs (regenerate with run_analysis.py)
+analysis/portfolios/*/*/*/*_trades.csv
+analysis/portfolios/*/*/*/*.png
+
+# ML-specific ignores
+models/*.h5
+models/*.pkl
+models/*.joblib
+models/*.pt
+models/*.pth
+checkpoints/
+*.onnx
+wandb/
+mlruns/
