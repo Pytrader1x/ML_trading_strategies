@@ -2,6 +2,40 @@
 
 PPO-based reinforcement learning model for optimizing trade exits. Combines classical EMA/Bollinger Band entry signals with learned exit timing.
 
+---
+
+## IMPORTANT: Action Guards for Training
+
+The model tends to learn **immediate partial exits at Bar 0 with 0 pips profit** - this is wasteful behavior that needs to be constrained.
+
+### Current Guards (Visualizer)
+
+```python
+# visualiser/src/config.py - VisualizerConfig
+min_profit_for_partial = 1.0   # Minimum pips before PARTIAL allowed
+min_bars_before_partial = 1    # Minimum bars held before PARTIAL allowed
+```
+
+### TODO: Training Environment Guards
+
+The training environment (`env.py`) should also enforce these constraints:
+1. **Block PARTIAL if pnl_pips < threshold** (e.g., 1.0 pips)
+2. **Block PARTIAL if bars_held < minimum** (e.g., 1 bar)
+3. Consider adding **negative reward** for attempting invalid partials
+
+Without these guards, the model learns to spam PARTIAL immediately, which:
+- Closes 50% of position at 0.0 pips (no benefit)
+- Increases transaction costs
+- Reduces position before trend develops
+
+**Action Items for v2:**
+- [ ] Add `min_profit_for_partial` to PPOConfig
+- [ ] Enforce in `VectorizedExitEnv._step_single()`
+- [ ] Add penalty reward for blocked actions
+- [ ] Retrain with guards enabled
+
+---
+
 ## Quick Start
 
 ```bash

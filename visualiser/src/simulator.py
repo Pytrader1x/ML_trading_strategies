@@ -406,9 +406,15 @@ class TradeSimulator:
                 closed_size=self.active_trade.position_size  # Close ALL remaining
             )
         elif action == Actions.PARTIAL_EXIT:
-            if self.active_trade.position_size > 0.25:
+            # Guard: Only allow partial if we have minimum profit AND minimum bars held
+            min_profit = self.config.min_profit_for_partial
+            min_bars = self.config.min_bars_before_partial
+            partial_allowed = (pnl_pips >= min_profit) and (self.bars_held >= min_bars)
+
+            if partial_allowed and self.active_trade.position_size > 0.25:
                 self._process_partial_exit(timestamp, current_price, pnl_pips, pnl_dollars)
-            else:
+            elif partial_allowed:
+                # Final exit if position too small
                 exit_trade = True
                 exit_reason = "RL_PARTIAL_FINAL"
                 self._record_action(
@@ -417,6 +423,7 @@ class TradeSimulator:
                     total_pnl_dollars, f"Final exit @ {current_price:.5f}",
                     closed_size=self.active_trade.position_size  # Close ALL remaining
                 )
+            # else: PARTIAL blocked by guard - treat as HOLD (do nothing)
         elif action == Actions.TIGHTEN_SL:
             self._process_tighten_sl(row, timestamp, current_price, pnl_pips,
                                      unrealized_pnl_dollars, total_pnl_dollars, old_sl)

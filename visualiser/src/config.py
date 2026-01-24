@@ -75,7 +75,10 @@ class VisualizerConfig:
         port: int = 8765,
         window_bars: int = 96,
         initial_speed: int = 10,
-        auto_open_browser: bool = True
+        auto_open_browser: bool = True,
+        # Action guards
+        min_profit_for_partial: float = 1.0,  # Minimum pips profit before allowing PARTIAL
+        min_bars_before_partial: int = 1      # Minimum bars held before allowing PARTIAL
     ):
         """
         Initialize visualizer configuration.
@@ -91,6 +94,8 @@ class VisualizerConfig:
             oos_end: End date for out-of-sample period
             port: WebSocket server port
             window_bars: Number of bars to display in chart
+            min_profit_for_partial: Minimum pips profit required for PARTIAL action
+            min_bars_before_partial: Minimum bars held before PARTIAL is allowed
         """
         self.strategy_name = strategy_name
 
@@ -112,6 +117,10 @@ class VisualizerConfig:
         self.window_bars = window_bars
         self.initial_speed = initial_speed
         self.auto_open_browser = auto_open_browser
+
+        # Action guards - prevent wasteful actions
+        self.min_profit_for_partial = min_profit_for_partial
+        self.min_bars_before_partial = min_bars_before_partial
 
     def __repr__(self):
         return f"VisualizerConfig(strategy='{self.strategy_name}', port={self.port})"
