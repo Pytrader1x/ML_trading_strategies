@@ -79,6 +79,7 @@ class TradeSimulator:
         self.completed_trades: List[Trade] = []
         self.entries: List[Dict] = []
         self.exits: List[Dict] = []
+        self.action_markers: List[Dict] = []  # Track all RL actions for chart display
 
         # State tracking for RL
         self.bars_held = 0
@@ -86,6 +87,11 @@ class TradeSimulator:
         self.max_adverse = 0.0
         self.action_history = [0] * 5
         self.current_sl_price = 0.0
+
+        # Activation history for timeline visualization
+        self.activation_history: List[Dict] = []
+        # Neuron-action correlation tracking (across all trades)
+        self.action_neuron_stats = {i: [] for i in range(5)}  # action_id -> list of activation vectors
 
         # Metrics calculator
         self.metrics = MetricsCalculator(position_size=self.config.position_size)
@@ -146,11 +152,14 @@ class TradeSimulator:
         self.completed_trades = []
         self.entries = []
         self.exits = []
+        self.action_markers = []
         self.bars_held = 0
         self.max_favorable = 0.0
         self.max_adverse = 0.0
         self.action_history = [0] * 5
         self.current_sl_price = 0.0
+        self.activation_history = []
+        # Note: action_neuron_stats NOT reset - accumulates across session
         self.metrics.reset()
 
     def build_state(self) -> torch.Tensor:
@@ -272,6 +281,7 @@ class TradeSimulator:
             'candles': candles,
             'entries': self._filter_to_window(self.entries),
             'exits': self._filter_to_window(self.exits),
+            'action_markers': self._filter_to_window(self.action_markers),
             'action': action,
             'probs': probs,
             'model_output': model_output,
@@ -280,7 +290,10 @@ class TradeSimulator:
             'current_trade': current_trade_info,
             'stats': self.metrics.get_stats(),
             'metrics': self.metrics.compute_metrics(),
-            'trade_history': trade_history
+            'trade_history': trade_history,
+            # Enhanced visualization data
+            'activation_timeline': self.activation_history[-100:],  # Last 100 bars
+            'action_correlations': self._compute_action_correlations()
         }
 
     def _enter_trade(self, row: pd.Series, timestamp: str):
@@ -322,6 +335,18 @@ class TradeSimulator:
             'confidence': result['confidence']
         }
         activations = result['activations']
+        activations_full = result.get('activations_full')
+
+        # Track activation history for timeline visualization
+        if activations_full:
+            self.activation_history.append({
+                'bar': self.bars_held,
+                'activations': activations_full,
+                'action': action
+            })
+            # Track neuron-action correlations (limit to 1000 samples per action)
+            if len(self.action_neuron_stats[action]) < 1000:
+                self.action_neuron_stats[action].append(activations_full)
 
         self.action_history = self.action_history[1:] + [action]
 
@@ -492,6 +517,18 @@ class TradeSimulator:
             **extra_fields
         )
 
+        # Add to action_markers for chart visualization (skip HOLD actions)
+        if action != 'HOLD':
+            self.action_markers.append({
+                'time': str(timestamp),
+                'price': float(price),
+                'action': action,
+                'pnl_pips': float(pnl_pips),
+                'pnl_dollars': float(pnl_dollars),
+                'direction': int(self.active_trade.direction),
+                'note': note
+            })
+
     def _check_sl_hit(self, row) -> Tuple[bool, float]:
         """Check if stop loss was hit."""
         if self.active_trade.direction == 1:
@@ -610,3 +647,38 @@ class TradeSimulator:
             trade_history.append(trade_dict)
 
         return trade_history
+
+    def _compute_action_correlations(self) -> Dict:
+        """
+        Compute neuron-action correlations for visualization.
+
+        Returns which neurons are most active when each action is chosen.
+        """
+        correlations = {}
+        action_names = ['HOLD', 'EXIT', 'TIGHTEN_SL', 'TRAIL_BE', 'PARTIAL']
+
+        for action_id, name in enumerate(action_names):
+            samples = self.action_neuron_stats[action_id]
+            if len(samples) < 5:
+                # Not enough samples yet
+                correlations[name] = {'top_neurons': [], 'mean_activation': 0.0, 'sample_count': len(samples)}
+                continue
+
+            # Compute mean activation per neuron for this action
+            samples_array = np.array(samples)  # shape: (n_samples, n_neurons)
+            mean_activations = np.mean(samples_array, axis=0)
+
+            # Find top 10 most active neurons for this action
+            top_indices = np.argsort(mean_activations)[-10:][::-1]
+            top_neurons = [
+                {'neuron': int(idx), 'activation': float(mean_activations[idx])}
+                for idx in top_indices
+            ]
+
+            correlations[name] = {
+                'top_neurons': top_neurons,
+                'mean_activation': float(np.mean(mean_activations)),
+                'sample_count': len(samples)
+            }
+
+        return correlations

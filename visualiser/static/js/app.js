@@ -10,9 +10,65 @@
 
 let ws;
 let isPlaying = false;
+let currentTab = 'snapshot';
 
 const actionNames = ['HOLD', 'EXIT', 'TIGHTEN_SL', 'TRAIL_BREAKEVEN', 'PARTIAL_EXIT'];
 const actionColors = ['#8b949e', '#f85149', '#d29922', '#58a6ff', '#a371f7'];
+
+// ============================================================================
+// Panel Toggle System
+// ============================================================================
+
+function togglePanel(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+
+    panel.classList.toggle('collapsed');
+
+    // Persist state to localStorage
+    const states = JSON.parse(localStorage.getItem('panelStates') || '{}');
+    states[panelId] = panel.classList.contains('collapsed');
+    localStorage.setItem('panelStates', JSON.stringify(states));
+}
+
+function restorePanelStates() {
+    const states = JSON.parse(localStorage.getItem('panelStates') || '{}');
+    Object.keys(states).forEach(panelId => {
+        const panel = document.getElementById(panelId);
+        if (panel && states[panelId]) {
+            panel.classList.add('collapsed');
+        }
+    });
+}
+
+// ============================================================================
+// Tab System
+// ============================================================================
+
+function switchTab(tabName) {
+    currentTab = tabName;
+
+    // Update tab buttons
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+
+    // Update tab content visibility
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.toggle('hidden', content.id !== 'tab-' + tabName);
+    });
+
+    // Trigger resize for Plotly charts in newly visible tab
+    setTimeout(() => {
+        if (tabName === 'timeline') {
+            Plotly.Plots.resize('timeline-chart');
+        } else if (tabName === 'correlations') {
+            Plotly.Plots.resize('correlations-chart');
+        } else if (tabName === 'snapshot') {
+            Plotly.Plots.resize('activations-chart');
+        }
+    }, 50);
+}
 
 // ============================================================================
 // Chart Initialization
@@ -51,7 +107,7 @@ function initCharts() {
         showlegend: false
     }, {responsive: true});
 
-    // Activations heatmap
+    // Activations heatmap (snapshot view)
     Plotly.newPlot('activations-chart', [{
         type: 'heatmap',
         z: [new Array(32).fill(0), new Array(32).fill(0), new Array(32).fill(0), new Array(32).fill(0)],
@@ -68,6 +124,54 @@ function initCharts() {
         margin: {l: 5, r: 5, t: 5, b: 5},
         xaxis: {visible: false},
         yaxis: {visible: false}
+    }, {responsive: true});
+
+    // Timeline heatmap (activation evolution during trade)
+    Plotly.newPlot('timeline-chart', [{
+        type: 'heatmap',
+        z: [[0]],
+        colorscale: [
+            [0, '#0d1117'],
+            [0.3, '#1f6feb'],
+            [0.6, '#a371f7'],
+            [1, '#f85149']
+        ],
+        showscale: false
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(13,17,23,0.5)',
+        margin: {l: 35, r: 5, t: 5, b: 25},
+        xaxis: {
+            title: 'Neuron',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)'
+        },
+        yaxis: {
+            title: 'Bar',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)'
+        }
+    }, {responsive: true});
+
+    // Correlations chart (neuron-action relationships)
+    Plotly.newPlot('correlations-chart', [], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(13,17,23,0.5)',
+        margin: {l: 70, r: 10, t: 10, b: 30},
+        barmode: 'group',
+        xaxis: {
+            title: 'Mean Activation',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)'
+        },
+        yaxis: {
+            title: '',
+            tickfont: {size: 9, color: '#8b949e'}
+        },
+        showlegend: false
     }, {responsive: true});
 }
 
@@ -116,9 +220,19 @@ function updateVisualization(data) {
         updateActionDisplay(data);
     }
 
-    // Update neural activations
+    // Update neural activations (snapshot)
     if (data.activations) {
         updateActivationsChart(data.activations);
+    }
+
+    // Update activation timeline
+    if (data.activation_timeline && data.activation_timeline.length > 0) {
+        updateTimelineChart(data.activation_timeline);
+    }
+
+    // Update neuron-action correlations
+    if (data.action_correlations) {
+        updateCorrelationsChart(data.action_correlations);
     }
 
     // Update metrics panel
@@ -169,7 +283,7 @@ function updateCandlestickChart(data) {
         });
     }
 
-    // Exit markers
+    // Exit markers (final trade exits at actual price)
     if (data.exits && data.exits.length > 0) {
         traces.push({
             type: 'scatter',
@@ -177,26 +291,124 @@ function updateCandlestickChart(data) {
             x: data.exits.map(e => e.time),
             y: data.exits.map(e => e.price),
             marker: {
-                size: 20,
+                size: 18,
                 color: data.exits.map(e => e.pnl >= 0 ? '#3fb950' : '#f85149'),
-                symbol: data.exits.map(e => e.direction === 1 ? 'triangle-down' : 'triangle-up'),
+                symbol: 'x',
                 line: {color: '#ffffff', width: 2}
             },
             text: data.exits.map(e => {
                 const sign = e.pnl >= 0 ? '+' : '';
                 const pips = e.pnl.toFixed(1);
                 const dollars = e.pnl_dollars ? (e.pnl_dollars >= 0 ? '+$' : '-$') + Math.abs(e.pnl_dollars).toFixed(0) : '';
-                return sign + pips + ' pips<br>' + dollars;
+                return sign + pips + 'p ' + dollars;
             }),
             textposition: data.exits.map(e => e.direction === 1 ? 'bottom center' : 'top center'),
             textfont: {
-                size: 11,
+                size: 10,
                 color: data.exits.map(e => e.pnl >= 0 ? '#3fb950' : '#f85149'),
                 family: 'SF Mono, monospace',
                 weight: 700
             },
-            name: 'Exit'
+            name: 'Exit',
+            hovertemplate: '%{text}<extra>EXIT</extra>'
         });
+    }
+
+    // RL Action markers (PARTIAL, TIGHTEN_SL, TRAIL_BE) at actual price levels
+    if (data.action_markers && data.action_markers.length > 0) {
+        // Group by action type
+        const partials = data.action_markers.filter(m => m.action === 'PARTIAL');
+        const tightens = data.action_markers.filter(m => m.action === 'TIGHTEN_SL');
+        const trails = data.action_markers.filter(m => m.action === 'TRAIL_BE');
+        const exits = data.action_markers.filter(m => m.action === 'EXIT');
+
+        // PARTIAL markers (purple diamonds)
+        if (partials.length > 0) {
+            traces.push({
+                type: 'scatter',
+                mode: 'markers+text',
+                x: partials.map(p => p.time),
+                y: partials.map(p => p.price),
+                marker: {
+                    size: 14,
+                    color: '#a371f7',
+                    symbol: 'diamond',
+                    line: {color: '#ffffff', width: 1}
+                },
+                text: partials.map(p => {
+                    const sign = p.pnl_pips >= 0 ? '+' : '';
+                    return sign + p.pnl_pips.toFixed(1) + 'p';
+                }),
+                textposition: partials.map(p => p.direction === 1 ? 'top center' : 'bottom center'),
+                textfont: {size: 9, color: '#a371f7', family: 'SF Mono, monospace'},
+                name: 'Partial',
+                hovertemplate: 'PARTIAL<br>%{y:.5f}<br>%{text}<extra></extra>'
+            });
+        }
+
+        // TIGHTEN_SL markers (orange square)
+        if (tightens.length > 0) {
+            traces.push({
+                type: 'scatter',
+                mode: 'markers',
+                x: tightens.map(t => t.time),
+                y: tightens.map(t => t.price),
+                marker: {
+                    size: 10,
+                    color: '#d29922',
+                    symbol: 'square',
+                    line: {color: '#ffffff', width: 1}
+                },
+                name: 'Tighten SL',
+                hovertemplate: 'TIGHTEN SL<br>%{y:.5f}<extra></extra>'
+            });
+        }
+
+        // TRAIL_BE markers (blue circle)
+        if (trails.length > 0) {
+            traces.push({
+                type: 'scatter',
+                mode: 'markers',
+                x: trails.map(t => t.time),
+                y: trails.map(t => t.price),
+                marker: {
+                    size: 10,
+                    color: '#58a6ff',
+                    symbol: 'circle',
+                    line: {color: '#ffffff', width: 1}
+                },
+                name: 'Trail BE',
+                hovertemplate: 'TRAIL BE<br>%{y:.5f}<extra></extra>'
+            });
+        }
+
+        // EXIT markers from action_markers (red X) - at actual price
+        if (exits.length > 0) {
+            traces.push({
+                type: 'scatter',
+                mode: 'markers+text',
+                x: exits.map(e => e.time),
+                y: exits.map(e => e.price),
+                marker: {
+                    size: 16,
+                    color: exits.map(e => e.pnl_pips >= 0 ? '#3fb950' : '#f85149'),
+                    symbol: 'x-thin',
+                    line: {width: 3, color: exits.map(e => e.pnl_pips >= 0 ? '#3fb950' : '#f85149')}
+                },
+                text: exits.map(e => {
+                    const sign = e.pnl_dollars >= 0 ? '+$' : '-$';
+                    return sign + Math.abs(e.pnl_dollars).toFixed(0);
+                }),
+                textposition: exits.map(e => e.direction === 1 ? 'bottom center' : 'top center'),
+                textfont: {
+                    size: 10,
+                    color: exits.map(e => e.pnl_pips >= 0 ? '#3fb950' : '#f85149'),
+                    family: 'SF Mono, monospace'
+                },
+                name: 'RL Exit',
+                hovertemplate: 'RL EXIT<br>%{y:.5f}<br>%{text}<extra></extra>'
+            });
+        }
     }
 
     let layout = {
@@ -359,6 +571,112 @@ function updateActivationsChart(activations) {
         margin: {l: 5, r: 5, t: 5, b: 5},
         xaxis: {visible: false},
         yaxis: {visible: false}
+    });
+}
+
+function updateTimelineChart(timeline) {
+    // timeline = [{bar: 0, activations: [128 floats], action: 0}, ...]
+    if (!timeline || timeline.length === 0) return;
+
+    // Build 2D array: rows=bars, cols=neurons
+    const z = timeline.map(t => t.activations);
+
+    // Color-code by action taken at each bar
+    const actionMarkers = timeline.map(t => actionNames[t.action] || 'HOLD');
+
+    Plotly.react('timeline-chart', [{
+        type: 'heatmap',
+        z: z,
+        colorscale: [[0, '#0d1117'], [0.3, '#1f6feb'], [0.6, '#a371f7'], [1, '#f85149']],
+        showscale: false,
+        hovertemplate: 'Bar %{y}<br>Neuron %{x}<br>Activation: %{z:.3f}<extra></extra>'
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(13,17,23,0.5)',
+        margin: {l: 35, r: 5, t: 5, b: 25},
+        xaxis: {
+            title: 'Neuron',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)'
+        },
+        yaxis: {
+            title: 'Bar',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)',
+            autorange: 'reversed'
+        }
+    });
+}
+
+function updateCorrelationsChart(correlations) {
+    // correlations = {HOLD: {top_neurons: [...], mean_activation: float, sample_count: int}, ...}
+    if (!correlations) return;
+
+    const actions = ['HOLD', 'EXIT', 'TIGHTEN_SL', 'TRAIL_BE', 'PARTIAL'];
+    const colors = ['#8b949e', '#f85149', '#d29922', '#58a6ff', '#a371f7'];
+
+    const traces = [];
+    const yLabels = [];
+    const xValues = [];
+    const barColors = [];
+
+    actions.forEach((action, idx) => {
+        const data = correlations[action];
+        if (data && data.sample_count > 0) {
+            const label = `${action} (n=${data.sample_count})`;
+            yLabels.push(label);
+            xValues.push(data.mean_activation);
+            barColors.push(colors[idx]);
+        }
+    });
+
+    if (yLabels.length === 0) {
+        // No data yet - show placeholder
+        Plotly.react('correlations-chart', [], {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(13,17,23,0.5)',
+            margin: {l: 70, r: 10, t: 10, b: 30},
+            annotations: [{
+                text: 'Collecting data...',
+                xref: 'paper',
+                yref: 'paper',
+                x: 0.5,
+                y: 0.5,
+                showarrow: false,
+                font: {size: 12, color: '#6e7681'}
+            }]
+        });
+        return;
+    }
+
+    Plotly.react('correlations-chart', [{
+        type: 'bar',
+        orientation: 'h',
+        y: yLabels,
+        x: xValues,
+        marker: {
+            color: barColors,
+            line: {color: 'rgba(255,255,255,0.1)', width: 1}
+        },
+        hovertemplate: '%{y}<br>Mean: %{x:.4f}<extra></extra>'
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(13,17,23,0.5)',
+        margin: {l: 110, r: 10, t: 10, b: 30},
+        xaxis: {
+            title: 'Mean Activation',
+            titlefont: {size: 9, color: '#6e7681'},
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)'
+        },
+        yaxis: {
+            title: '',
+            tickfont: {size: 9, color: '#8b949e'},
+            automargin: true
+        },
+        showlegend: false
     });
 }
 
@@ -585,5 +903,6 @@ document.getElementById('speed-slider').addEventListener('input', (e) => {
 
 window.onload = () => {
     initCharts();
+    restorePanelStates();
     connectWebSocket();
 };

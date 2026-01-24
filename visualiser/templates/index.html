@@ -48,74 +48,113 @@
 
         <div class="side-panel">
             <!-- Current Trade -->
-            <div class="panel">
-                <h3>Active Position</h3>
-                <div id="current-trade-container">
-                    <div class="no-trade">No active trade</div>
+            <div class="panel collapsible" id="panel-position">
+                <h3 onclick="togglePanel('panel-position')">
+                    <span class="toggle-icon">&#9660;</span>
+                    Active Position
+                </h3>
+                <div class="panel-content">
+                    <div id="current-trade-container">
+                        <div class="no-trade">No active trade</div>
+                    </div>
                 </div>
             </div>
 
             <!-- RL Action -->
-            <div class="panel">
-                <h3>RL Agent Decision</h3>
-                <div class="action-display">
-                    <div class="action-name" id="action-name">WAITING</div>
-                    <div class="action-probs" id="action-probs">
-                        <div class="prob-bar">
-                            <span class="prob-label">HOLD</span>
-                            <div class="prob-fill-container"><div class="prob-fill" id="prob-0" style="width:0%; background:#8b949e;"></div></div>
-                            <span class="prob-value" id="prob-val-0">0.0%</span>
+            <div class="panel collapsible" id="panel-decision">
+                <h3 onclick="togglePanel('panel-decision')">
+                    <span class="toggle-icon">&#9660;</span>
+                    RL Agent Decision
+                </h3>
+                <div class="panel-content">
+                    <div class="action-display">
+                        <div class="action-name" id="action-name">WAITING</div>
+                        <div class="action-probs" id="action-probs">
+                            <div class="prob-bar">
+                                <span class="prob-label">HOLD</span>
+                                <div class="prob-fill-container"><div class="prob-fill" id="prob-0" style="width:0%; background:#8b949e;"></div></div>
+                                <span class="prob-value" id="prob-val-0">0.0%</span>
+                            </div>
+                            <div class="prob-bar">
+                                <span class="prob-label">EXIT</span>
+                                <div class="prob-fill-container"><div class="prob-fill" id="prob-1" style="width:0%; background:#f85149;"></div></div>
+                                <span class="prob-value" id="prob-val-1">0.0%</span>
+                            </div>
+                            <div class="prob-bar">
+                                <span class="prob-label">TIGHTEN SL</span>
+                                <div class="prob-fill-container"><div class="prob-fill" id="prob-2" style="width:0%; background:#d29922;"></div></div>
+                                <span class="prob-value" id="prob-val-2">0.0%</span>
+                            </div>
+                            <div class="prob-bar">
+                                <span class="prob-label">TRAIL BE</span>
+                                <div class="prob-fill-container"><div class="prob-fill" id="prob-3" style="width:0%; background:#58a6ff;"></div></div>
+                                <span class="prob-value" id="prob-val-3">0.0%</span>
+                            </div>
+                            <div class="prob-bar">
+                                <span class="prob-label">PARTIAL</span>
+                                <div class="prob-fill-container"><div class="prob-fill" id="prob-4" style="width:0%; background:#a371f7;"></div></div>
+                                <span class="prob-value" id="prob-val-4">0.0%</span>
+                            </div>
                         </div>
-                        <div class="prob-bar">
-                            <span class="prob-label">EXIT</span>
-                            <div class="prob-fill-container"><div class="prob-fill" id="prob-1" style="width:0%; background:#f85149;"></div></div>
-                            <span class="prob-value" id="prob-val-1">0.0%</span>
-                        </div>
-                        <div class="prob-bar">
-                            <span class="prob-label">TIGHTEN SL</span>
-                            <div class="prob-fill-container"><div class="prob-fill" id="prob-2" style="width:0%; background:#d29922;"></div></div>
-                            <span class="prob-value" id="prob-val-2">0.0%</span>
-                        </div>
-                        <div class="prob-bar">
-                            <span class="prob-label">TRAIL BE</span>
-                            <div class="prob-fill-container"><div class="prob-fill" id="prob-3" style="width:0%; background:#58a6ff;"></div></div>
-                            <span class="prob-value" id="prob-val-3">0.0%</span>
-                        </div>
-                        <div class="prob-bar">
-                            <span class="prob-label">PARTIAL</span>
-                            <div class="prob-fill-container"><div class="prob-fill" id="prob-4" style="width:0%; background:#a371f7;"></div></div>
-                            <span class="prob-value" id="prob-val-4">0.0%</span>
-                        </div>
-                    </div>
-                    <div class="model-output">
-                        <div class="model-stat">
-                            <div class="model-stat-value" id="model-value">0.00</div>
-                            <div class="model-stat-label">Value Est.</div>
-                        </div>
-                        <div class="model-stat">
-                            <div class="model-stat-value" id="model-entropy">0.00</div>
-                            <div class="model-stat-label">Entropy</div>
-                        </div>
-                        <div class="model-stat">
-                            <div class="model-stat-value" id="model-confidence">0%</div>
-                            <div class="model-stat-label">Confidence</div>
+                        <div class="model-output">
+                            <div class="model-stat">
+                                <div class="model-stat-value" id="model-value">0.00</div>
+                                <div class="model-stat-label">Value Est.</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="model-stat-value" id="model-entropy">0.00</div>
+                                <div class="model-stat-label">Entropy</div>
+                            </div>
+                            <div class="model-stat">
+                                <div class="model-stat-value" id="model-confidence">0%</div>
+                                <div class="model-stat-label">Confidence</div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Neural Activations -->
-            <div class="panel">
-                <h3>Neural Activations (Encoder Layer)</h3>
-                <div class="activations-container">
-                    <div id="activations-chart"></div>
+            <!-- Model Insights (Neural Network Visualization) -->
+            <div class="panel collapsible" id="panel-insights">
+                <h3 onclick="togglePanel('panel-insights')">
+                    <span class="toggle-icon">&#9660;</span>
+                    Model Insights
+                </h3>
+                <div class="panel-content">
+                    <div class="tab-bar">
+                        <button class="tab active" data-tab="snapshot" onclick="switchTab('snapshot')">Snapshot</button>
+                        <button class="tab" data-tab="timeline" onclick="switchTab('timeline')">Timeline</button>
+                        <button class="tab" data-tab="correlations" onclick="switchTab('correlations')">Correlations</button>
+                    </div>
+                    <div class="tab-content" id="tab-snapshot">
+                        <div class="activations-container">
+                            <div id="activations-chart"></div>
+                        </div>
+                        <div class="insight-caption">Encoder layer activations (4x32 neurons)</div>
+                    </div>
+                    <div class="tab-content hidden" id="tab-timeline">
+                        <div class="timeline-container">
+                            <div id="timeline-chart"></div>
+                        </div>
+                        <div class="insight-caption">Activation evolution during current trade</div>
+                    </div>
+                    <div class="tab-content hidden" id="tab-correlations">
+                        <div class="correlations-container">
+                            <div id="correlations-chart"></div>
+                        </div>
+                        <div class="insight-caption">Top neurons per action (session-wide)</div>
+                    </div>
                 </div>
             </div>
 
             <!-- Performance Metrics -->
-            <div class="panel metrics-panel">
-                <h3>Performance Metrics</h3>
-                <div class="metrics-grid">
+            <div class="panel collapsible metrics-panel" id="panel-metrics">
+                <h3 onclick="togglePanel('panel-metrics')">
+                    <span class="toggle-icon">&#9660;</span>
+                    Performance Metrics
+                </h3>
+                <div class="panel-content">
+                    <div class="metrics-grid">
                     <div class="metric-box highlight">
                         <div class="metric-value" id="metric-sharpe">0.00</div>
                         <div class="metric-label">Sharpe Ratio</div>
@@ -195,6 +234,7 @@
                     <div class="metric-box">
                         <div class="metric-value positive" id="metric-pips">+0</div>
                         <div class="metric-label">Total Pips</div>
+                    </div>
                     </div>
                 </div>
             </div>

@@ -114,7 +114,7 @@ body {
 
 .container {
     display: grid;
-    grid-template-columns: 1fr 340px;
+    grid-template-columns: 1fr 380px;
     grid-template-rows: 1fr auto;
     gap: 12px;
     padding: 12px;
@@ -725,7 +725,120 @@ body {
     height: 100px;
 }
 
-#candlestick-chart, #activations-chart {
+#candlestick-chart, #activations-chart, #timeline-chart, #correlations-chart {
     width: 100%;
     height: 100%;
+}
+
+/* ============================================================================
+   Collapsible Panels
+   ============================================================================ */
+
+.panel.collapsible h3 {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: color 0.2s ease;
+}
+
+.panel.collapsible h3:hover {
+    color: #58a6ff;
+}
+
+.toggle-icon {
+    font-size: 10px;
+    transition: transform 0.3s ease;
+    color: #58a6ff;
+}
+
+.panel.collapsible.collapsed .toggle-icon {
+    transform: rotate(-90deg);
+}
+
+.panel-content {
+    max-height: 1000px;
+    overflow: hidden;
+    transition: max-height 0.3s ease, opacity 0.2s ease, padding 0.3s ease;
+    opacity: 1;
+}
+
+.panel.collapsible.collapsed .panel-content {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+/* ============================================================================
+   Tab System
+   ============================================================================ */
+
+.tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    background: rgba(48, 54, 61, 0.5);
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.tab {
+    flex: 1;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.tab:hover {
+    color: #c9d1d9;
+    background: rgba(48, 54, 61, 0.5);
+}
+
+.tab.active {
+    background: linear-gradient(135deg, #1f6feb, #388bfd);
+    color: #fff;
+}
+
+.tab-content {
+    transition: opacity 0.2s ease;
+}
+
+.tab-content.hidden {
+    display: none;
+}
+
+/* ============================================================================
+   Model Insights Charts
+   ============================================================================ */
+
+.timeline-container {
+    height: 120px;
+    background: rgba(13, 17, 23, 0.5);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.correlations-container {
+    height: 180px;
+    background: rgba(13, 17, 23, 0.5);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.insight-caption {
+    font-size: 9px;
+    color: #6e7681;
+    text-align: center;
+    margin-top: 6px;
+    font-style: italic;
 }

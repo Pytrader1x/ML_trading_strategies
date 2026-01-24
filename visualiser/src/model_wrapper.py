@@ -103,11 +103,15 @@ class ActorCriticWithActivations(nn.Module):
             # Confidence = max probability
             confidence = probs.max(dim=-1).values
 
-        # Format activations for heatmap (4 rows x 32 cols)
+        # Format activations for heatmap (4 rows x 32 cols) and full vector
         activations_2d = None
+        activations_full = None
         if 'encoder_2' in self.activations:
             act = self.activations['encoder_2'][0].cpu().numpy()
             n = len(act)
+            # Full vector for timeline/correlation analysis
+            activations_full = act.tolist()
+            # Reshaped for snapshot heatmap
             rows = 4
             cols = min(32, n // rows)
             if rows * cols > 0:
@@ -119,7 +123,8 @@ class ActorCriticWithActivations(nn.Module):
             'value': value.item(),
             'entropy': entropy.item(),
             'confidence': confidence.item(),
-            'activations': activations_2d
+            'activations': activations_2d,
+            'activations_full': activations_full
         }
 
 
