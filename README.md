@@ -1,27 +1,14 @@
 # ML Trading Strategies
 
-A systematic backtesting framework for evaluating **machine learning-based trading strategies** across multiple currency pairs and timeframes.
+Train machine learning models to discover alpha and generate profitable trading signals. Validated using the [Production Backtest Engine](https://github.com/Pytrader1x/production-backtest-engine).
 
-## Overview
+## Objective
 
-This repository contains ML-driven trading strategies backtested on **7 currency pairs** across **3 timeframes** (15M, 1H, 4H) using a 20-year historical dataset (2005-2025).
-
-**Goal:** Develop and validate ML models for trading with robust out-of-sample performance (Sharpe > 0.5).
-
----
-
-## Quick Start
-
-```bash
-# Run a single ML strategy on one pair
-python strategies/lstm_trend/run.py -i AUDUSD -t 1H
-
-# Run all timeframes for a pair
-python strategies/lstm_trend/run.py -i AUDUSD --all
-
-# Run ALL strategies on ALL pairs (full batch)
-python run_all_backtests.py
-```
+Build ML/RL models that learn to trade FX markets profitably:
+- Train models on 20 years of historical data (2005-2025)
+- Generate trading signals with edge (alpha)
+- Validate with rigorous backtesting + Monte Carlo simulation
+- Target: Sharpe > 1.0, Max DD < 20%, Win Rate > 50%
 
 ---
 
@@ -29,162 +16,169 @@ python run_all_backtests.py
 
 ```
 ML_trading_strategies/
-├── data/                          # Historical price data (CSV)
-│   └── {PAIR}_MASTER.csv          # 1-minute OHLC data
+├── data/                           # Historical price data
+│   └── {PAIR}_MASTER.csv           # 1-minute OHLC (2005-2025)
 │
-├── strategies/                    # ML Strategy implementations
+├── strategies/                     # ML strategy implementations
 │   └── {strategy_name}/
-│       ├── strategy.py            # Strategy class with ML model
-│       ├── model.py               # ML model definition (optional)
-│       ├── train.py               # Training script (optional)
-│       ├── run.py                 # Entry point
-│       └── results/               # Backtest outputs
+│       ├── strategy.py             # Strategy class (backtest interface)
+│       ├── model.py                # ML model definition
+│       ├── train.py                # Training script
+│       ├── run.py                  # Entry point for backtesting
+│       ├── model/                  # Saved model weights/checkpoints
+│       │   └── best_model.pt
+│       └── results/                # Backtest outputs
 │           └── {PAIR}/
-│               ├── SUMMARY.md     # Performance comparison
-│               ├── 15M/           # 15-minute results
-│               ├── 1H/            # 1-hour results
-│               └── 4H/            # 4-hour results
+│               ├── {TF}/
+│               │   ├── backtest_summary.png
+│               │   ├── backtest_report.html
+│               │   ├── trades.csv
+│               │   └── backtest_results.json
+│               └── SUMMARY.md
 │
-├── analysis/                      # Portfolio analysis tools
-│   ├── run_analysis.py            # Portfolio aggregation & leaderboard
-│   ├── output/                    # Leaderboard CSVs
-│   └── portfolios/                # Portfolio backtest results
-│
-├── docs/                          # Documentation and examples
-├── run_all_backtests.py           # Batch runner
 └── README.md
 ```
 
 ---
 
-## Output Files
+## Available Data
 
-Each backtest generates:
+| Pair | Records | Date Range | File Size |
+|------|---------|------------|-----------|
+| AUDUSD | ~10M | 2005-2025 | 369 MB |
+| EURUSD | ~10M | 2005-2025 | 376 MB |
+| GBPUSD | ~10M | 2005-2025 | 297 MB |
+| NZDUSD | ~10M | 2005-2025 | 293 MB |
+| USDCAD | ~10M | 2005-2025 | 292 MB |
+| USDCHF | ~10M | 2005-2025 | 295 MB |
+| USDJPY | ~10M | 2005-2025 | 36 MB |
 
-| File | Description |
-|------|-------------|
-| `backtest_report.html` | Interactive chart with trades, equity curve |
-| `backtest_summary.png` | Visual summary (equity, drawdown, stats) |
-| `backtest_results.json` | Raw metrics (Sharpe, win rate, P&L, etc.) |
-| `trades.csv` | Trade-by-trade log |
-| `SUMMARY.md` | Multi-timeframe comparison table |
-
----
-
-## ML Strategy Categories
-
-### Supervised Learning
-| Strategy | Description | Status |
-|----------|-------------|--------|
-| `xgboost_regime` | XGBoost regime classification | Planned |
-| `lstm_trend` | LSTM trend prediction | Planned |
-| `transformer_price` | Transformer price forecasting | Planned |
-
-### Reinforcement Learning
-| Strategy | Description | Status |
-|----------|-------------|--------|
-| `dqn_trading` | Deep Q-Network for trade decisions | Planned |
-| `ppo_portfolio` | PPO for portfolio allocation | Planned |
-
-### Ensemble Methods
-| Strategy | Description | Status |
-|----------|-------------|--------|
-| `stacking_signals` | Stacked ensemble of indicators | Planned |
-| `voting_classifier` | Multiple model voting | Planned |
+**Note:** USDJPY uses pip size 0.01 (vs 0.0001 for others).
 
 ---
 
-## Key Metrics
+## Creating a Strategy
 
-We focus on these metrics for strategy evaluation:
+### 1. Strategy Class (strategy.py)
 
-| Metric | Target | Description |
-|--------|--------|-------------|
-| **Sharpe Ratio** | > 0.5 | Risk-adjusted return (higher = better) |
-| **Max Drawdown** | < 25% | Largest peak-to-trough decline |
-| **Win Rate** | > 40% | Percentage of profitable trades |
-| **Profit Factor** | > 1.2 | Gross profit / gross loss |
-| **Trade Count** | > 100 | Statistical significance |
-| **OOS Performance** | ~IIS | Out-of-sample vs in-sample consistency |
-
----
-
-## Currency Pairs
-
-| Pair | Data Range | Notes |
-|------|------------|-------|
-| AUDUSD | 2005-2025 | Australian Dollar |
-| EURUSD | 2005-2025 | Euro (most liquid) |
-| GBPUSD | 2005-2025 | British Pound |
-| NZDUSD | 2005-2025 | New Zealand Dollar |
-| USDCAD | 2005-2025 | Canadian Dollar |
-| USDCHF | 2005-2025 | Swiss Franc |
-| USDJPY | 2005-2025 | Japanese Yen (pip=0.01) |
-
-**Note:** USDJPY uses pip size 0.01 (vs 0.0001 for others). Some strategies need adjustment.
-
----
-
-## Creating a New ML Strategy
+Inherit from `Strategy` and implement `init` + `next`:
 
 ```python
-# strategies/my_ml_strategy/strategy.py
 from backtest_engine import Strategy
 import joblib
 
 class MyMLStrategy(Strategy):
     def init(self):
-        # Load pre-trained model
-        self.model = joblib.load('model.pkl')
+        # Load trained model
+        self.model = joblib.load('model/best_model.pkl')
 
-        # Calculate features on self.data (full DataFrame)
-        self.data['ema_20'] = self.data['Close'].ewm(span=20).mean()
+        # Calculate features
+        self.data['sma_20'] = self.data['Close'].rolling(20).mean()
         self.data['rsi'] = self._calc_rsi(14)
-        self.features = self.data[['ema_20', 'rsi']].values
+        self.features = self.data[['sma_20', 'rsi']].values
 
-    def next(self, i: int, record):
-        if self.broker.active_trade:
+    def next(self, i, record):
+        if i < 50 or self.broker.active_trade:
             return
 
         # Get prediction
         X = self.features[i:i+1]
         pred = self.model.predict(X)[0]
 
-        close = record['Close']
+        price = record['Close']
         if pred == 1:  # Buy signal
-            sl = close - 0.0050
-            tp = close + 0.0100
-            self.broker.buy(i, close, size=100000, sl=sl, tp=tp)
+            sl = price - 0.0050
+            tp = price + 0.0100
+            self.broker.buy(i, price, size=100000, sl=sl, tp=tp)
         elif pred == -1:  # Sell signal
-            sl = close + 0.0050
-            tp = close - 0.0100
-            self.broker.sell(i, close, size=100000, sl=sl, tp=tp)
+            sl = price + 0.0050
+            tp = price - 0.0100
+            self.broker.sell(i, price, size=100000, sl=sl, tp=tp)
+```
+
+### 2. Training Script (train.py)
+
+```python
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+import joblib
+
+# Load data
+df = pd.read_csv('../../data/EURUSD_MASTER.csv', parse_dates=['Time'], index_col='Time')
+df = df.resample('1h').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'}).dropna()
+
+# Create features and labels
+df['returns'] = df['Close'].pct_change()
+df['sma_20'] = df['Close'].rolling(20).mean()
+df['label'] = (df['returns'].shift(-1) > 0).astype(int)
+
+# Train/test split (walk-forward)
+train = df['2005':'2020']
+test = df['2021':'2025']
+
+# Train model
+model = RandomForestClassifier(n_estimators=100)
+model.fit(train[['sma_20']].dropna(), train['label'].dropna())
+
+# Save
+joblib.dump(model, 'model/best_model.pkl')
+```
+
+### 3. Run Script (run.py)
+
+```python
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parents[2]))
+
+import pandas as pd
+from backtest_engine import Backtester
+from strategy import MyMLStrategy
+
+# Load and resample data
+df = pd.read_csv('../../data/EURUSD_MASTER.csv', parse_dates=['Time'], index_col='Time')
+df = df.resample('1h').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'}).dropna()
+
+# Run backtest
+bt = Backtester(MyMLStrategy, df, cash=1_000_000, commission=0.50, spread=0.0001)
+bt.run_monte_carlo(output_dir='results/EURUSD/1H', n_sims=500, open_browser=True)
 ```
 
 ---
 
-## ML Best Practices
+## ML Strategy Ideas
 
-### Walk-Forward Validation
-```python
-# Use expanding or rolling window for training
-train_end = int(len(data) * 0.7)
-train_data = data[:train_end]
-test_data = data[train_end:]
+### Supervised Learning
+| Strategy | Approach |
+|----------|----------|
+| `xgboost_regime` | XGBoost to classify market regimes |
+| `lstm_trend` | LSTM for trend direction prediction |
+| `transformer_price` | Transformer for price movement |
 
-# Retrain periodically (e.g., every 6 months)
-```
+### Reinforcement Learning
+| Strategy | Approach |
+|----------|----------|
+| `ppo_trader` | PPO agent learns entry/exit timing |
+| `dqn_sizing` | DQN for dynamic position sizing |
 
-### Feature Engineering
-- Use technical indicators as features
-- Include lagged returns, volatility measures
-- Normalize features (z-score or min-max)
-- Avoid lookahead bias
+### Meta-Learning
+| Strategy | Approach |
+|----------|----------|
+| `meta_labeler` | Train model to filter base signals |
+| `ensemble_vote` | Combine multiple model predictions |
 
-### Model Selection
-- Start simple (Logistic Regression, XGBoost)
-- Graduate to complex models (LSTM, Transformer) if needed
-- Ensemble multiple models for robustness
+---
+
+## Key Metrics
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| **Sharpe Ratio** | > 1.0 | Risk-adjusted return |
+| **Max Drawdown** | < 20% | Worst peak-to-trough |
+| **Win Rate** | > 50% | % profitable trades |
+| **Profit Factor** | > 1.5 | Gross profit / gross loss |
+| **Trades** | > 100 | Statistical significance |
 
 ---
 
@@ -193,28 +187,71 @@ test_data = data[train_end:]
 Requires the [Production Backtest Engine](https://github.com/Pytrader1x/production-backtest-engine).
 
 ```bash
-# Install the engine (update path in run.py files as needed)
 git clone https://github.com/Pytrader1x/production-backtest-engine.git
+pip install -e production-backtest-engine/
 ```
 
-Key features:
-- Vectorized indicator calculation
-- Single position at a time
-- SL/TP as absolute prices
-- Monte Carlo simulation (500 sims)
-- HTML report generation
+**Key Features:**
+- Event-driven backtesting (no look-ahead bias)
+- Monte Carlo simulation (500+ sims)
+- Interactive HTML reports
+- PNG summary charts
+- Parameter optimization
+
+### Quick Reference
+
+```python
+from backtest_engine import Backtester, Strategy, MonteCarloEngine
+
+# Run backtest
+bt = Backtester(MyStrategy, df, cash=1_000_000)
+stats = bt.run()
+
+# Monte Carlo validation
+bt.run_monte_carlo(output_dir='results', n_sims=500)
+
+# Access metrics
+sharpe = stats.get('sharpe_ratio', 0)
+max_dd = stats.get('max_drawdown_pct', 0)
+win_rate = stats.get('win_rate', 0)
+```
+
+### Output Files
+
+```
+results/{PAIR}/{TIMEFRAME}/
+├── backtest_summary.png    # Visual summary
+├── backtest_report.html    # Interactive dashboard
+├── trades.csv              # Trade log
+└── backtest_results.json   # Raw metrics
+```
 
 ---
 
 ## Rules
 
-1. **No overfitting**: Use proper train/test splits and cross-validation
-2. **Out-of-sample testing**: Mandatory walk-forward validation for all ML strategies
-3. **Realistic costs**: Include spread and commission
-4. **Statistical significance**: Minimum 100+ trades
-5. **Robust metrics**: Prefer Sharpe > 0.5, max DD < 25%
-6. **Feature hygiene**: No lookahead bias, proper lagging
+1. **No overfitting** - Use proper train/test splits
+2. **Walk-forward validation** - Train on past, test on future
+3. **Out-of-sample testing** - Reserve 2021-2025 for final validation
+4. **Feature hygiene** - No lookahead bias, proper lagging
+5. **Realistic costs** - Include spread (0.0001) and commission ($0.50)
+6. **Statistical significance** - Minimum 100+ trades
 
 ---
 
-*Generated by Production Backtest Engine*
+## Quick Start
+
+```bash
+# 1. Create new strategy
+mkdir -p strategies/my_strategy/model
+cd strategies/my_strategy
+
+# 2. Train model
+python train.py
+
+# 3. Run backtest
+python run.py -i EURUSD -t 1H
+
+# 4. Run all pairs/timeframes
+python run.py --all
+```
