@@ -4,35 +4,86 @@ PPO-based reinforcement learning model for optimizing trade exits. Combines clas
 
 ---
 
-## IMPORTANT: Action Guards for Training
+## CRITICAL: Action Guards for Training
 
-The model tends to learn **immediate partial exits at Bar 0 with 0 pips profit** - this is wasteful behavior that needs to be constrained.
+### The Problem: Immediate 0-Profit Exits
 
-### Current Guards (Visualizer)
+The model learns to **immediately PARTIAL/EXIT at Bar 0 with 0 pips** because:
 
-```python
-# visualiser/src/config.py - VisualizerConfig
-min_profit_for_partial = 1.0   # Minimum pips before PARTIAL allowed
-min_bars_before_partial = 1    # Minimum bars held before PARTIAL allowed
-```
+1. **Time penalty avoidance**: `time_coef` penalty grows over time. Exiting at Bar 0 avoids all future time penalties.
+2. **Zero-cost exits**: With 0 pips, reward ≈ 0 (not negative), so it's "safe"
+3. **No action cost**: PARTIAL had no cost, unlike TIGHTEN_SL or TRAIL_BE
 
-### TODO: Training Environment Guards
-
-The training environment (`env.py`) should also enforce these constraints:
-1. **Block PARTIAL if pnl_pips < threshold** (e.g., 1.0 pips)
-2. **Block PARTIAL if bars_held < minimum** (e.g., 1 bar)
-3. Consider adding **negative reward** for attempting invalid partials
-
-Without these guards, the model learns to spam PARTIAL immediately, which:
-- Closes 50% of position at 0.0 pips (no benefit)
-- Increases transaction costs
+This is a **local optimum** the model finds, but it's terrible for real trading:
+- Closes 50% position at 0.0 pips (no benefit)
+- Pays spread/commission for nothing
 - Reduces position before trend develops
 
-**Action Items for v2:**
-- [ ] Add `min_profit_for_partial` to PPOConfig
-- [ ] Enforce in `VectorizedExitEnv._step_single()`
-- [ ] Add penalty reward for blocked actions
-- [ ] Retrain with guards enabled
+### The Solution: Action Guards
+
+Guards are now implemented in **both** training (`env.py`) and visualization (`simulator.py`).
+
+#### Training Environment Guards (`config.py` → `RewardConfig`)
+
+```python
+# Minimum normalized PnL required (0.001 ≈ 10 pips for typical FX)
+min_profit_for_partial: float = 0.001
+min_profit_for_exit: float = 0.0       # EXIT always allowed (can set higher)
+
+# Minimum bars held before action allowed
+min_bars_for_partial: int = 1          # Must hold at least 1 bar
+min_bars_for_exit: int = 0             # EXIT allowed anytime
+
+# Penalty for attempting blocked actions
+invalid_action_penalty: float = 0.01   # Negative reward for invalid attempts
+```
+
+#### How It Works in Training
+
+```python
+# In VectorizedExitEnv.step():
+
+# PARTIAL only allowed if: profit >= threshold AND bars >= minimum
+partial_allowed = (unrealized_pnl >= min_profit_for_partial) & \
+                  (current_bar >= min_bars_for_partial)
+
+if partial_allowed:
+    # Execute the partial exit
+    rewards = unrealized_pnl * reward_scale
+    dones = True
+else:
+    # Block! Convert to HOLD + apply penalty
+    rewards -= invalid_action_penalty
+    # Position stays open, model learns this action was bad
+```
+
+#### Visualizer Guards (`visualiser/src/config.py`)
+
+```python
+# VisualizerConfig
+min_profit_for_partial = 1.0   # Minimum pips (not normalized)
+min_bars_before_partial = 1    # Minimum bars
+```
+
+### Retraining Required
+
+After changing these parameters, you **must retrain** for the model to learn:
+1. Don't attempt PARTIAL at Bar 0 (will be blocked + penalized)
+2. Wait for profit before taking partial profits
+3. HOLD is the correct action when not in sufficient profit
+
+```bash
+# Retrain with guards enabled
+python train.py --version v2_with_guards --episodes data/episodes_train_2005_2021.pkl
+```
+
+### Tuning the Guards
+
+| Parameter | Conservative | Moderate | Aggressive |
+|-----------|-------------|----------|------------|
+| `min_profit_for_partial` | 0.002 (20 pips) | 0.001 (10 pips) | 0.0005 (5 pips) |
+| `min_bars_for_partial` | 3 | 1 | 0 |
+| `invalid_action_penalty` | 0.02 | 0.01 | 0.005 |
 
 ---
 
