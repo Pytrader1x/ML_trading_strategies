@@ -659,9 +659,9 @@ class TradeSimulator:
 
         for action_id, name in enumerate(action_names):
             samples = self.action_neuron_stats[action_id]
-            if len(samples) < 5:
-                # Not enough samples yet
-                correlations[name] = {'top_neurons': [], 'mean_activation': 0.0, 'sample_count': len(samples)}
+            if len(samples) == 0:
+                # No samples yet
+                correlations[name] = {'top_neurons': [], 'mean_activation': 0.0, 'sample_count': 0}
                 continue
 
             # Compute mean activation per neuron for this action

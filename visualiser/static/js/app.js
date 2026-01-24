@@ -560,51 +560,128 @@ function updateActionDisplay(data) {
 }
 
 function updateActivationsChart(activations) {
+    if (!activations || activations.length === 0) return;
+
+    // Normalize activations for better contrast (min-max scaling per snapshot)
+    const flat = activations.flat();
+    const min = Math.min(...flat);
+    const max = Math.max(...flat);
+    const range = max - min || 1;
+
+    const normalized = activations.map(row =>
+        row.map(val => (val - min) / range)
+    );
+
+    // Create neuron labels (every 4th neuron)
+    const numCols = activations[0].length;
+    const tickvals = [];
+    const ticktext = [];
+    for (let i = 0; i < numCols; i += 4) {
+        tickvals.push(i);
+        ticktext.push(i.toString());
+    }
+
     Plotly.react('activations-chart', [{
         type: 'heatmap',
-        z: activations,
-        colorscale: [[0, '#0d1117'], [0.3, '#1f6feb'], [0.6, '#a371f7'], [1, '#f85149']],
-        showscale: false
+        z: normalized,
+        colorscale: [
+            [0, '#0d1117'],
+            [0.15, '#161b22'],
+            [0.3, '#1f6feb'],
+            [0.5, '#388bfd'],
+            [0.7, '#a371f7'],
+            [0.85, '#d29922'],
+            [1, '#f85149']
+        ],
+        showscale: false,
+        hovertemplate: 'Row %{y}, Neuron %{x}<br>Value: %{z:.3f}<extra></extra>'
     }], {
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        margin: {l: 5, r: 5, t: 5, b: 5},
-        xaxis: {visible: false},
-        yaxis: {visible: false}
+        plot_bgcolor: 'rgba(13,17,23,0.5)',
+        margin: {l: 25, r: 5, t: 5, b: 20},
+        xaxis: {
+            tickvals: tickvals,
+            ticktext: ticktext,
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)',
+            zeroline: false
+        },
+        yaxis: {
+            tickvals: [0, 1, 2, 3],
+            ticktext: ['L1', 'L2', 'L3', 'L4'],
+            tickfont: {size: 8, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.3)',
+            zeroline: false
+        }
     });
 }
 
 function updateTimelineChart(timeline) {
     // timeline = [{bar: 0, activations: [128 floats], action: 0}, ...]
-    if (!timeline || timeline.length === 0) return;
+    if (!timeline || timeline.length === 0) {
+        // Show placeholder when no data
+        Plotly.react('timeline-chart', [], {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(13,17,23,0.5)',
+            margin: {l: 35, r: 5, t: 5, b: 25},
+            xaxis: {visible: false},
+            yaxis: {visible: false},
+            annotations: [{
+                text: 'Enter a trade to see activation evolution',
+                xref: 'paper', yref: 'paper',
+                x: 0.5, y: 0.5,
+                showarrow: false,
+                font: {size: 10, color: '#6e7681'}
+            }]
+        });
+        return;
+    }
 
     // Build 2D array: rows=bars, cols=neurons
     const z = timeline.map(t => t.activations);
 
-    // Color-code by action taken at each bar
-    const actionMarkers = timeline.map(t => actionNames[t.action] || 'HOLD');
+    // Normalize across the entire timeline for better contrast
+    const flat = z.flat();
+    const min = Math.min(...flat);
+    const max = Math.max(...flat);
+    const range = max - min || 1;
+
+    const normalized = z.map(row =>
+        row.map(val => (val - min) / range)
+    );
+
+    // Create action annotations on the side
+    const actions = timeline.map(t => actionNames[t.action] || 'HOLD');
 
     Plotly.react('timeline-chart', [{
         type: 'heatmap',
-        z: z,
-        colorscale: [[0, '#0d1117'], [0.3, '#1f6feb'], [0.6, '#a371f7'], [1, '#f85149']],
+        z: normalized,
+        colorscale: [
+            [0, '#0d1117'],
+            [0.2, '#1f6feb'],
+            [0.4, '#388bfd'],
+            [0.6, '#a371f7'],
+            [0.8, '#d29922'],
+            [1, '#f85149']
+        ],
         showscale: false,
-        hovertemplate: 'Bar %{y}<br>Neuron %{x}<br>Activation: %{z:.3f}<extra></extra>'
+        hovertemplate: 'Bar %{y} | Neuron %{x}<br>Activation: %{z:.3f}<extra></extra>'
     }], {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(13,17,23,0.5)',
-        margin: {l: 35, r: 5, t: 5, b: 25},
+        margin: {l: 30, r: 5, t: 5, b: 20},
         xaxis: {
-            title: 'Neuron',
-            titlefont: {size: 9, color: '#6e7681'},
-            tickfont: {size: 8, color: '#6e7681'},
-            gridcolor: 'rgba(48,54,61,0.3)'
+            title: '',
+            tickfont: {size: 7, color: '#6e7681'},
+            gridcolor: 'rgba(48,54,61,0.2)',
+            dtick: 16,
+            zeroline: false
         },
         yaxis: {
-            title: 'Bar',
-            titlefont: {size: 9, color: '#6e7681'},
+            title: '',
             tickfont: {size: 8, color: '#6e7681'},
-            gridcolor: 'rgba(48,54,61,0.3)',
+            gridcolor: 'rgba(48,54,61,0.2)',
+            zeroline: false,
             autorange: 'reversed'
         }
     });
@@ -614,62 +691,81 @@ function updateCorrelationsChart(correlations) {
     // correlations = {HOLD: {top_neurons: [...], mean_activation: float, sample_count: int}, ...}
     if (!correlations) return;
 
-    const actions = ['HOLD', 'EXIT', 'TIGHTEN_SL', 'TRAIL_BE', 'PARTIAL'];
-    const colors = ['#8b949e', '#f85149', '#d29922', '#58a6ff', '#a371f7'];
+    const actionConfig = [
+        {name: 'HOLD', label: 'HOLD', color: '#8b949e'},
+        {name: 'EXIT', label: 'EXIT', color: '#f85149'},
+        {name: 'TIGHTEN_SL', label: 'TIGHTEN', color: '#d29922'},
+        {name: 'TRAIL_BE', label: 'TRAIL BE', color: '#58a6ff'},
+        {name: 'PARTIAL', label: 'PARTIAL', color: '#a371f7'}
+    ];
 
-    const traces = [];
     const yLabels = [];
     const xValues = [];
     const barColors = [];
+    const hoverTexts = [];
+    let totalSamples = 0;
 
-    actions.forEach((action, idx) => {
-        const data = correlations[action];
-        if (data && data.sample_count > 0) {
-            const label = `${action} (n=${data.sample_count})`;
+    actionConfig.forEach(cfg => {
+        const data = correlations[cfg.name];
+        if (data) {
+            totalSamples += data.sample_count;
+            // Show all actions, even with 0 samples
+            const count = data.sample_count;
+            const label = `${cfg.label}`;
             yLabels.push(label);
-            xValues.push(data.mean_activation);
-            barColors.push(colors[idx]);
+            xValues.push(data.mean_activation || 0);
+            barColors.push(cfg.color);
+            hoverTexts.push(`${cfg.label}<br>Samples: ${count}<br>Mean: ${(data.mean_activation || 0).toFixed(4)}`);
         }
     });
 
-    if (yLabels.length === 0) {
-        // No data yet - show placeholder
+    if (totalSamples === 0) {
+        // No data yet - show styled placeholder
         Plotly.react('correlations-chart', [], {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(13,17,23,0.5)',
-            margin: {l: 70, r: 10, t: 10, b: 30},
+            margin: {l: 60, r: 10, t: 10, b: 25},
+            xaxis: {visible: false},
+            yaxis: {visible: false},
             annotations: [{
-                text: 'Collecting data...',
-                xref: 'paper',
-                yref: 'paper',
-                x: 0.5,
-                y: 0.5,
+                text: 'Take actions to see correlations',
+                xref: 'paper', yref: 'paper',
+                x: 0.5, y: 0.5,
                 showarrow: false,
-                font: {size: 12, color: '#6e7681'}
+                font: {size: 10, color: '#6e7681'}
             }]
         });
         return;
     }
+
+    // Normalize x values for better visualization
+    const maxVal = Math.max(...xValues.filter(v => v > 0)) || 1;
 
     Plotly.react('correlations-chart', [{
         type: 'bar',
         orientation: 'h',
         y: yLabels,
         x: xValues,
+        text: xValues.map(v => v > 0 ? v.toFixed(3) : ''),
+        textposition: 'outside',
+        textfont: {size: 9, color: '#8b949e'},
         marker: {
             color: barColors,
-            line: {color: 'rgba(255,255,255,0.1)', width: 1}
+            line: {color: 'rgba(255,255,255,0.2)', width: 1}
         },
-        hovertemplate: '%{y}<br>Mean: %{x:.4f}<extra></extra>'
+        hovertext: hoverTexts,
+        hoverinfo: 'text'
     }], {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(13,17,23,0.5)',
-        margin: {l: 110, r: 10, t: 10, b: 30},
+        margin: {l: 60, r: 40, t: 5, b: 20},
         xaxis: {
-            title: 'Mean Activation',
-            titlefont: {size: 9, color: '#6e7681'},
+            title: '',
             tickfont: {size: 8, color: '#6e7681'},
-            gridcolor: 'rgba(48,54,61,0.3)'
+            gridcolor: 'rgba(48,54,61,0.3)',
+            zeroline: true,
+            zerolinecolor: 'rgba(48,54,61,0.5)',
+            range: [0, maxVal * 1.3]
         },
         yaxis: {
             title: '',
