@@ -10,6 +10,24 @@
 <body>
     <div class="header">
         <h1>RL Exit Optimizer - Live Visualization</h1>
+
+        <!-- Playback Controls - Always visible in header -->
+        <div class="header-controls">
+            <button class="btn btn-primary" id="play-btn" onclick="togglePlay()">
+                <span id="play-icon">&#9658;</span> Play
+            </button>
+            <button class="btn btn-secondary" onclick="stepForward()">Step &rarr;</button>
+            <button class="btn btn-secondary btn-highlight" onclick="nextTrade()">
+                Next Trade &#9654;&#9654;
+            </button>
+            <button class="btn btn-secondary" onclick="resetPlayback()">Reset</button>
+            <div class="header-speed-control">
+                <span>Speed:</span>
+                <input type="range" class="speed-slider" id="speed-slider" min="1" max="100" value="10">
+                <span class="speed-value" id="speed-value">10x</span>
+            </div>
+        </div>
+
         <div class="status">
             <div class="status-item">
                 <div class="status-dot" id="connection-status"></div>
@@ -181,25 +199,6 @@
                 </div>
             </div>
 
-            <!-- Playback Controls - NOW UNDER METRICS -->
-            <div class="panel controls-panel">
-                <h3>Playback Controls</h3>
-                <div class="controls">
-                    <button class="btn btn-primary" id="play-btn" onclick="togglePlay()">
-                        <span id="play-icon">&#9658;</span> Play
-                    </button>
-                    <button class="btn btn-secondary" onclick="stepForward()">Step &rarr;</button>
-                    <button class="btn btn-secondary btn-highlight" onclick="nextTrade()">
-                        Next Trade &#9654;&#9654;
-                    </button>
-                    <button class="btn btn-secondary" onclick="resetPlayback()">Reset</button>
-                </div>
-                <div class="speed-control">
-                    <span>Speed:</span>
-                    <input type="range" class="speed-slider" id="speed-slider" min="1" max="100" value="10">
-                    <span class="speed-value" id="speed-value">10x</span>
-                </div>
-            </div>
         </div>
 
         <!-- Trade Log -->
