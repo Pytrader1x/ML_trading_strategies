@@ -73,7 +73,9 @@ class VisualizerConfig:
         oos_start: str = '2022-01-01',
         oos_end: str = '2025-12-31',
         port: int = 8765,
-        window_bars: int = 96
+        window_bars: int = 96,
+        initial_speed: int = 10,
+        auto_open_browser: bool = True
     ):
         """
         Initialize visualizer configuration.
@@ -108,6 +110,8 @@ class VisualizerConfig:
 
         self.port = port
         self.window_bars = window_bars
+        self.initial_speed = initial_speed
+        self.auto_open_browser = auto_open_browser
 
     def __repr__(self):
         return f"VisualizerConfig(strategy='{self.strategy_name}', port={self.port})"
