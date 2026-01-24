@@ -26,23 +26,6 @@
             <div class="chart-container">
                 <div id="candlestick-chart"></div>
             </div>
-            <div class="controls-panel">
-                <div class="controls">
-                    <button class="btn btn-primary" id="play-btn" onclick="togglePlay()">
-                        <span id="play-icon">&#9658;</span> Play
-                    </button>
-                    <button class="btn btn-secondary" onclick="stepForward()">Step &rarr;</button>
-                    <button class="btn btn-secondary btn-highlight" onclick="nextTrade()">
-                        Next Trade &#9654;&#9654;
-                    </button>
-                    <button class="btn btn-secondary" onclick="resetPlayback()">Reset</button>
-                    <div class="speed-control">
-                        <span>Speed:</span>
-                        <input type="range" class="speed-slider" id="speed-slider" min="1" max="100" value="10">
-                        <span class="speed-value" id="speed-value">10x</span>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <div class="side-panel">
@@ -113,7 +96,7 @@
 
             <!-- Performance Metrics -->
             <div class="panel metrics-panel">
-                <h3>📊 Performance Metrics</h3>
+                <h3>Performance Metrics</h3>
                 <div class="metrics-grid">
                     <div class="metric-box highlight">
                         <div class="metric-value" id="metric-sharpe">0.00</div>
@@ -195,6 +178,26 @@
                         <div class="metric-value positive" id="metric-pips">+0</div>
                         <div class="metric-label">Total Pips</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Playback Controls - NOW UNDER METRICS -->
+            <div class="panel controls-panel">
+                <h3>Playback Controls</h3>
+                <div class="controls">
+                    <button class="btn btn-primary" id="play-btn" onclick="togglePlay()">
+                        <span id="play-icon">&#9658;</span> Play
+                    </button>
+                    <button class="btn btn-secondary" onclick="stepForward()">Step &rarr;</button>
+                    <button class="btn btn-secondary btn-highlight" onclick="nextTrade()">
+                        Next Trade &#9654;&#9654;
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetPlayback()">Reset</button>
+                </div>
+                <div class="speed-control">
+                    <span>Speed:</span>
+                    <input type="range" class="speed-slider" id="speed-slider" min="1" max="100" value="10">
+                    <span class="speed-value" id="speed-value">10x</span>
                 </div>
             </div>
         </div>

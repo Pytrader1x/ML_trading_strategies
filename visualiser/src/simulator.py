@@ -377,7 +377,8 @@ class TradeSimulator:
             self._record_action(
                 'EXIT', timestamp, current_price, pnl_pips,
                 pnl_dollars * self.active_trade.position_size,
-                total_pnl_dollars, f"Full exit @ {current_price:.5f}"
+                total_pnl_dollars, f"Full exit @ {current_price:.5f}",
+                closed_size=self.active_trade.position_size  # Close ALL remaining
             )
         elif action == Actions.PARTIAL_EXIT:
             if self.active_trade.position_size > 0.25:
@@ -388,7 +389,8 @@ class TradeSimulator:
                 self._record_action(
                     'EXIT', timestamp, current_price, pnl_pips,
                     pnl_dollars * self.active_trade.position_size,
-                    total_pnl_dollars, f"Final exit @ {current_price:.5f}"
+                    total_pnl_dollars, f"Final exit @ {current_price:.5f}",
+                    closed_size=self.active_trade.position_size  # Close ALL remaining
                 )
         elif action == Actions.TIGHTEN_SL:
             self._process_tighten_sl(row, timestamp, current_price, pnl_pips,
@@ -408,13 +410,15 @@ class TradeSimulator:
 
     def _process_partial_exit(self, timestamp, current_price, pnl_pips, pnl_dollars):
         """Process a partial exit."""
+        # Close 50% of CURRENT position
         partial_size = self.active_trade.position_size * 0.5
         partial_pnl_dollars = pnl_pips * self.config.position_size * partial_size / 10000
 
         self._record_action(
             'PARTIAL', timestamp, current_price, pnl_pips, partial_pnl_dollars,
             self.active_trade.realized_pnl_dollars + partial_pnl_dollars,
-            f"Partial {partial_size*100:.0f}% @ {current_price:.5f}",
+            f"Close {partial_size*100:.0f}% @ {current_price:.5f}",
+            closed_size=partial_size,  # Pass the SIZE BEING CLOSED
             remaining_pct=(self.active_trade.position_size - partial_size) * 100
         )
 
@@ -463,14 +467,27 @@ class TradeSimulator:
         )
 
     def _record_action(self, action, timestamp, price, pnl_pips, pnl_dollars,
-                       cumulative_pnl, note, **extra_fields):
-        """Record an action to the trade's action history."""
+                       cumulative_pnl, note, closed_size=None, **extra_fields):
+        """
+        Record an action to the trade's action history.
+
+        Args:
+            closed_size: For PARTIAL/EXIT, the fraction being closed (e.g., 0.5 for 50%)
+                        If None, defaults to current position_size (for non-exit actions)
+        """
+        # For PARTIAL/EXIT actions, closed_size should be passed explicitly
+        # For other actions (HOLD, TIGHTEN, TRAIL), show remaining position
+        if closed_size is not None:
+            display_size = closed_size
+        else:
+            display_size = self.active_trade.position_size
+
         self.active_trade.add_action(
             action=action, bar=self.bars_held, time=timestamp,
             time_pretty=format_datetime_pretty(timestamp),
             price=price, pnl_pips=pnl_pips, pnl_dollars=pnl_dollars,
-            position_size_pct=self.active_trade.position_size * 100,
-            position_m=self.config.position_size * self.active_trade.position_size / 1_000_000,
+            position_size_pct=display_size * 100,
+            position_m=self.config.position_size * display_size / 1_000_000,
             cumulative_pnl=cumulative_pnl, sl=self.current_sl_price, note=note,
             **extra_fields
         )

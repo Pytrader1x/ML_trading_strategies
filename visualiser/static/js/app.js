@@ -431,12 +431,23 @@ function updateTradeLog(tradeHistory) {
                 const aPnlSign = a.pnl_dollars >= 0 ? '+' : '';
                 const aPnlClass = a.pnl_dollars >= 0 ? 'positive' : 'negative';
 
+                // For PARTIAL/EXIT, show Buy/Sell based on direction
+                // SHORT position: closing = Buy, LONG position: closing = Sell
+                let actionDisplayName = a.action;
+                if (a.action === 'PARTIAL') {
+                    actionDisplayName = t.direction === 1 ? 'PARTIAL (Sell)' : 'PARTIAL (Buy)';
+                } else if (a.action === 'EXIT') {
+                    actionDisplayName = t.direction === 1 ? 'EXIT (Sell)' : 'EXIT (Buy)';
+                }
+
                 let actionContent = '';
                 if (a.action === 'PARTIAL' || a.action === 'EXIT') {
+                    // position_size_pct and position_m now show the SIZE BEING CLOSED
+                    const closeLabel = a.action === 'EXIT' ? 'Close' : 'Close';
                     actionContent = `
                         <div class="action-time">${a.time_pretty || ''}</div>
                         <div class="action-price">@ ${a.price.toFixed(5)}</div>
-                        <div class="action-size">${a.position_size_pct.toFixed(0)}% (${a.position_m.toFixed(1)}M)</div>
+                        <div class="action-size">${closeLabel} ${a.position_size_pct.toFixed(0)}% (${a.position_m.toFixed(1)}M)</div>
                         <div class="action-pnl ${aPnlClass}">${aPnlSign}${a.pnl_pips.toFixed(1)} pips</div>
                         <div class="action-pnl ${aPnlClass}">${aPnlSign}$${a.pnl_dollars.toFixed(0)}</div>
                     `;
@@ -458,7 +469,7 @@ function updateTradeLog(tradeHistory) {
                 return `
                     <div class="action-item ${actionClass}">
                         <div class="action-header">
-                            <span class="action-type ${actionClass}">${a.action}</span>
+                            <span class="action-type ${actionClass}">${actionDisplayName}</span>
                             <span class="action-bar">Bar ${a.bar}</span>
                         </div>
                         ${actionContent}
@@ -466,23 +477,42 @@ function updateTradeLog(tradeHistory) {
                 `;
             }).join('');
 
-            // Add TOTAL summary for completed trades
+            // Add TOTAL summary for completed trades with PnL breakdown
             if (!isActive && t.pnl_dollars !== undefined) {
                 const totalPnl = t.pnl_dollars;
                 const totalClass = totalPnl >= 0 ? 'positive' : 'negative';
                 const totalSign = totalPnl >= 0 ? '+' : '';
                 const totalPipsVal = t.pnl_pips || 0;
                 const totalPipsSign = totalPipsVal >= 0 ? '+' : '';
+                const totalItemClass = totalPnl >= 0 ? 'total-win' : 'total-loss';
+
+                // Build PnL breakdown from actions (partials and exits)
+                let breakdownHtml = '';
+                const exitActions = actions.filter(a => a.action === 'PARTIAL' || a.action === 'EXIT');
+                if (exitActions.length > 0) {
+                    const breakdownItems = exitActions.map(a => {
+                        const sign = a.pnl_dollars >= 0 ? '+' : '';
+                        const pSign = a.pnl_pips >= 0 ? '+' : '';
+                        const valClass = a.pnl_dollars >= 0 ? 'positive' : 'negative';
+                        return `<div class="pnl-breakdown-item">
+                            <span class="label">${a.position_m.toFixed(1)}M × ${pSign}${a.pnl_pips.toFixed(1)}p</span>
+                            <span class="value ${valClass}">${sign}$${a.pnl_dollars.toFixed(0)}</span>
+                        </div>`;
+                    }).join('');
+
+                    breakdownHtml = `<div class="pnl-breakdown">${breakdownItems}</div>`;
+                }
 
                 actionsHtml += `
-                    <div class="action-item" style="border-left: 3px solid ${totalPnl >= 0 ? '#3fb950' : '#f85149'}; background: ${totalPnl >= 0 ? 'rgba(63, 185, 80, 0.15)' : 'rgba(248, 81, 73, 0.15)'}; min-width: 140px;">
+                    <div class="action-item ${totalItemClass}">
                         <div class="action-header">
                             <span class="action-type" style="color: ${totalPnl >= 0 ? '#3fb950' : '#f85149'}; font-size: 10px;">TOTAL</span>
                             <span class="action-bar" style="background: ${totalPnl >= 0 ? 'rgba(63, 185, 80, 0.3)' : 'rgba(248, 81, 73, 0.3)'}">${t.exit_reason || 'Closed'}</span>
                         </div>
-                        <div style="font-size: 10px; color: #8b949e; margin-bottom: 2px;">Full Trade Result</div>
+                        <div style="font-size: 10px; color: #8b949e; margin-bottom: 2px;">Full Trade (2.0M)</div>
                         <div class="action-pnl ${totalClass}" style="font-size: 13px;">${totalPipsSign}${totalPipsVal.toFixed(1)} pips</div>
-                        <div class="action-pnl ${totalClass}" style="font-size: 15px; font-weight: 800;">${totalSign}$${Math.abs(totalPnl).toFixed(0)}</div>
+                        <div class="action-pnl ${totalClass}" style="font-size: 16px; font-weight: 800;">${totalSign}$${Math.abs(totalPnl).toFixed(0)}</div>
+                        ${breakdownHtml}
                     </div>
                 `;
             }
