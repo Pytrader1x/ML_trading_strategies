@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RL Exit Optimizer - Live Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="header">
+        <h1>RL Exit Optimizer - Live Visualization</h1>
+        <div class="status">
+            <div class="status-item">
+                <div class="status-dot" id="connection-status"></div>
+                <span id="connection-text">Connecting...</span>
+            </div>
+            <div class="status-item">
+                <span id="timestamp" style="font-family: 'SF Mono', monospace;">--</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="main-panel">
+            <div class="chart-container">
+                <div id="candlestick-chart"></div>
+            </div>
+            <div class="controls-panel">
+                <div class="controls">
+                    <button class="btn btn-primary" id="play-btn" onclick="togglePlay()">
+                        <span id="play-icon">&#9658;</span> Play
+                    </button>
+                    <button class="btn btn-secondary" onclick="stepForward()">Step &rarr;</button>
+                    <button class="btn btn-secondary btn-highlight" onclick="nextTrade()">
+                        Next Trade &#9654;&#9654;
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetPlayback()">Reset</button>
+                    <div class="speed-control">
+                        <span>Speed:</span>
+                        <input type="range" class="speed-slider" id="speed-slider" min="1" max="100" value="10">
+                        <span class="speed-value" id="speed-value">10x</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="side-panel">
+            <!-- Current Trade -->
+            <div class="panel">
+                <h3>Active Position</h3>
+                <div id="current-trade-container">
+                    <div class="no-trade">No active trade</div>
+                </div>
+            </div>
+
+            <!-- RL Action -->
+            <div class="panel">
+                <h3>RL Agent Decision</h3>
+                <div class="action-display">
+                    <div class="action-name" id="action-name">WAITING</div>
+                    <div class="action-probs" id="action-probs">
+                        <div class="prob-bar">
+                            <span class="prob-label">HOLD</span>
+                            <div class="prob-fill-container"><div class="prob-fill" id="prob-0" style="width:0%; background:#8b949e;"></div></div>
+                            <span class="prob-value" id="prob-val-0">0.0%</span>
+                        </div>
+                        <div class="prob-bar">
+                            <span class="prob-label">EXIT</span>
+                            <div class="prob-fill-container"><div class="prob-fill" id="prob-1" style="width:0%; background:#f85149;"></div></div>
+                            <span class="prob-value" id="prob-val-1">0.0%</span>
+                        </div>
+                        <div class="prob-bar">
+                            <span class="prob-label">TIGHTEN SL</span>
+                            <div class="prob-fill-container"><div class="prob-fill" id="prob-2" style="width:0%; background:#d29922;"></div></div>
+                            <span class="prob-value" id="prob-val-2">0.0%</span>
+                        </div>
+                        <div class="prob-bar">
+                            <span class="prob-label">TRAIL BE</span>
+                            <div class="prob-fill-container"><div class="prob-fill" id="prob-3" style="width:0%; background:#58a6ff;"></div></div>
+                            <span class="prob-value" id="prob-val-3">0.0%</span>
+                        </div>
+                        <div class="prob-bar">
+                            <span class="prob-label">PARTIAL</span>
+                            <div class="prob-fill-container"><div class="prob-fill" id="prob-4" style="width:0%; background:#a371f7;"></div></div>
+                            <span class="prob-value" id="prob-val-4">0.0%</span>
+                        </div>
+                    </div>
+                    <div class="model-output">
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="model-value">0.00</div>
+                            <div class="model-stat-label">Value Est.</div>
+                        </div>
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="model-entropy">0.00</div>
+                            <div class="model-stat-label">Entropy</div>
+                        </div>
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="model-confidence">0%</div>
+                            <div class="model-stat-label">Confidence</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Neural Activations -->
+            <div class="panel">
+                <h3>Neural Activations (Encoder Layer)</h3>
+                <div class="activations-container">
+                    <div id="activations-chart"></div>
+                </div>
+            </div>
+
+            <!-- Performance Metrics -->
+            <div class="panel metrics-panel">
+                <h3>📊 Performance Metrics</h3>
+                <div class="metrics-grid">
+                    <div class="metric-box highlight">
+                        <div class="metric-value" id="metric-sharpe">0.00</div>
+                        <div class="metric-label">Sharpe Ratio</div>
+                    </div>
+                    <div class="metric-box highlight">
+                        <div class="metric-value" id="metric-winrate">0%</div>
+                        <div class="metric-label">Win Rate</div>
+                    </div>
+                    <div class="metric-box highlight">
+                        <div class="metric-value positive" id="metric-pnl">$0</div>
+                        <div class="metric-label">Total P&L</div>
+                    </div>
+                    <div class="metric-box highlight">
+                        <div class="metric-value" id="metric-return">0%</div>
+                        <div class="metric-label">Return %</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-trades">0</div>
+                        <div class="metric-label">Trades</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-pf">0.00</div>
+                        <div class="metric-label">Profit Factor</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-avgwin">$0</div>
+                        <div class="metric-label">Avg Win</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-avgloss">$0</div>
+                        <div class="metric-label">Avg Loss</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value long-color" id="metric-longpct">0%</div>
+                        <div class="metric-label">Long %</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value short-color" id="metric-shortpct">0%</div>
+                        <div class="metric-label">Short %</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-longwr">0%</div>
+                        <div class="metric-label">Long WR</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-shortwr">0%</div>
+                        <div class="metric-label">Short WR</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-avgdur">0</div>
+                        <div class="metric-label">Avg Bars</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value negative" id="metric-maxdd">$0</div>
+                        <div class="metric-label">Max DD</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-maxwin">$0</div>
+                        <div class="metric-label">Best Trade</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-maxloss">$0</div>
+                        <div class="metric-label">Worst Trade</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value rl-color" id="metric-rlexit">0%</div>
+                        <div class="metric-label">RL Exit %</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value sl-color" id="metric-slhit">0%</div>
+                        <div class="metric-label">SL Hit %</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value" id="metric-partials">0.0</div>
+                        <div class="metric-label">Partials/Trade</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value positive" id="metric-pips">+0</div>
+                        <div class="metric-label">Total Pips</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trade Log -->
+        <div class="trade-log-container">
+            <h3>
+                <span style="color:#58a6ff;">📊</span> DETAILED TRADE LOG
+                <span style="font-size:10px; color:#8b949e; font-weight:400; margin-left:auto;">
+                    PIP VALUE: $200/pip | POSITION: 2M AUDUSD | Actions → scroll horizontally
+                </span>
+            </h3>
+            <div id="trade-log-body">
+                <div style="text-align:center; color:#8b949e; padding:30px;">Waiting for trades...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
