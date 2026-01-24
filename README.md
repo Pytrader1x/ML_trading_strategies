@@ -25,16 +25,16 @@ ML_trading_strategies/
 │       ├── model.py                # ML model definition
 │       ├── train.py                # Training script
 │       ├── run.py                  # Entry point for backtesting
-│       ├── model/                  # Saved model weights/checkpoints
-│       │   └── best_model.pt
-│       └── results/                # Backtest outputs
-│           └── {PAIR}/
-│               ├── {TF}/
-│               │   ├── backtest_summary.png
-│               │   ├── backtest_report.html
-│               │   ├── trades.csv
-│               │   └── backtest_results.json
-│               └── SUMMARY.md
+│       ├── experiment_manager.py   # Version management CLI
+│       │
+│       ├── experiments/            # Versioned experiments
+│       │   ├── registry.json       # Central tracking
+│       │   └── v1_baseline/
+│       │       ├── experiment.yaml # Config snapshot
+│       │       ├── models/         # Trained weights
+│       │       └── results/        # Backtest outputs
+│       │
+│       └── data/                   # Strategy-specific training data
 │
 └── README.md
 ```
@@ -236,6 +236,59 @@ results/{PAIR}/{TIMEFRAME}/
 4. **Feature hygiene** - No lookahead bias, proper lagging
 5. **Realistic costs** - Include spread (0.0001) and commission ($0.50)
 6. **Statistical significance** - Minimum 100+ trades
+7. **Version experiments** - Use versioned directories for model iteration (see below)
+
+---
+
+## Experiment Versioning
+
+For strategies with iterative model development (especially RL), use versioned experiments for reproducibility and comparison.
+
+### Structure
+
+```
+strategies/{strategy_name}/
+├── experiments/
+│   ├── registry.json          # Central tracking
+│   ├── COMPARISON.md          # Auto-generated comparison
+│   │
+│   ├── v1_baseline/           # Version 1
+│   │   ├── experiment.yaml    # Config snapshot
+│   │   ├── models/            # Trained weights
+│   │   └── results/           # Backtest outputs
+│   │
+│   └── v2_*/                  # Future versions...
+│
+├── data/                      # Shared training data
+└── config.py, train.py, etc.  # Shared code
+```
+
+### Usage
+
+```bash
+cd strategies/ema_bb_v2_rl
+
+# List versions
+python experiment_manager.py list
+
+# Create new version from parent
+python experiment_manager.py create v2_experiment --parent v1_baseline
+
+# Train specific version
+python train.py --version v2_experiment --episodes data/episodes_train.pkl
+
+# Backtest specific version
+python run.py -i AUDUSD -t 15M --version v2_experiment
+
+# Compare versions
+python experiment_manager.py compare v1_baseline v2_experiment
+```
+
+### Version Naming
+
+Format: `v{N}_{short_description}`
+
+Examples: `v1_baseline`, `v2_entropy`, `v3_larger_net`
 
 ---
 

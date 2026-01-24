@@ -4,10 +4,12 @@ PPO Training Script for RL Exit Optimizer.
 
 Trains an Actor-Critic policy to learn optimal trade exits.
 Supports W&B logging for real-time monitoring.
+Supports versioned experiments for reproducibility.
 
 Usage:
     python train.py --episodes data/episodes_AUDUSD_15M.pkl --timesteps 10000000
     python train.py --episodes data/episodes_AUDUSD_15M.pkl --wandb --timesteps 5000000
+    python train.py --version v2_entropy --episodes data/episodes_train_2005_2021.pkl
 """
 
 import sys
@@ -84,6 +86,9 @@ class PPOTrainer:
         # Metrics
         self.episode_returns = []
         self.episode_lengths = []
+
+        # Models directory (can be overridden for versioned experiments)
+        self._models_dir = STRATEGY_DIR / "models"
 
         # Initialize W&B
         if self.use_wandb:
@@ -182,10 +187,10 @@ class PPOTrainer:
 
             # === Save Checkpoint ===
             if update % config.save_interval == 0 and update > 0:
-                self._save_checkpoint(update)
+                self._save_checkpoint(update, models_dir=self._models_dir)
 
         # Final save
-        self._save_checkpoint(num_updates, final=True)
+        self._save_checkpoint(num_updates, final=True, models_dir=self._models_dir)
 
         if self.use_wandb:
             wandb.finish()
@@ -324,10 +329,11 @@ class PPOTrainer:
         if mean_return > self.best_return and len(self.episode_returns) > 50:
             self.best_return = mean_return
 
-    def _save_checkpoint(self, update: int, final: bool = False):
+    def _save_checkpoint(self, update: int, final: bool = False, models_dir: Path = None):
         """Save model checkpoint."""
-        models_dir = STRATEGY_DIR / "models"
-        models_dir.mkdir(exist_ok=True)
+        if models_dir is None:
+            models_dir = STRATEGY_DIR / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
 
         if final:
             path = models_dir / "exit_policy_final.pt"
@@ -347,6 +353,10 @@ class PPOTrainer:
 
         if self.use_wandb:
             wandb.save(str(path))
+
+    def set_models_dir(self, models_dir: Path):
+        """Set models directory for version-aware checkpointing."""
+        self._models_dir = models_dir
 
 
 def load_episodes(episode_file: Path) -> list:
@@ -418,6 +428,24 @@ def evaluate_policy(
     return metrics
 
 
+def get_version_paths(version: str) -> dict:
+    """Get paths for a specific experiment version."""
+    if version:
+        exp_dir = STRATEGY_DIR / "experiments" / version
+        return {
+            'models': exp_dir / "models",
+            'results': exp_dir / "results",
+            'training_metrics': exp_dir / "results" / "training" / "training_metrics.json",
+        }
+    else:
+        # Default paths (backwards compatibility)
+        return {
+            'models': STRATEGY_DIR / "models",
+            'results': STRATEGY_DIR / "results",
+            'training_metrics': STRATEGY_DIR / "data" / "training_metrics.json",
+        }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train RL Exit Policy")
     parser.add_argument('--episodes', type=str, required=True, help='Path to episodes file')
@@ -429,6 +457,7 @@ def main():
     parser.add_argument('--run-name', type=str, default=None, help='W&B run name')
     parser.add_argument('--eval-only', type=str, default=None, help='Path to model for eval only')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
+    parser.add_argument('--version', type=str, default=None, help='Experiment version (e.g., v1_baseline)')
     args = parser.parse_args()
 
     # Check device
@@ -465,6 +494,14 @@ def main():
     # Create or load policy
     policy = ActorCritic(config)
 
+    # Get version-specific paths
+    version_paths = get_version_paths(args.version)
+
+    if args.version:
+        print(f"\n[Version: {args.version}]")
+        print(f"  Models: {version_paths['models']}")
+        print(f"  Results: {version_paths['results']}")
+
     if args.eval_only:
         # Evaluation mode
         checkpoint = torch.load(args.eval_only, map_location=device, weights_only=False)
@@ -477,18 +514,28 @@ def main():
         trainer = PPOTrainer(
             env, policy, config,
             use_wandb=args.wandb,
-            run_name=args.run_name,
+            run_name=args.run_name or (f"ppo_{args.version}" if args.version else None),
         )
+
+        # Set version-specific models directory
+        trainer.set_models_dir(version_paths['models'])
+
         metrics = trainer.train()
 
         # Final evaluation
         evaluate_policy(policy, env, n_episodes=1000)
 
-        # Save metrics
-        metrics_file = STRATEGY_DIR / "data" / "training_metrics.json"
+        # Save metrics to version-specific location
+        metrics_file = version_paths['training_metrics']
+        metrics_file.parent.mkdir(parents=True, exist_ok=True)
         with open(metrics_file, 'w') as f:
             json.dump({k: [float(v) for v in vs] for k, vs in metrics.items()}, f)
         print(f"Saved training metrics to {metrics_file}")
+
+        # Update experiment status
+        if args.version:
+            print(f"\nTo update results in registry, run:")
+            print(f"  python experiment_manager.py update-results {args.version}")
 
 
 if __name__ == "__main__":

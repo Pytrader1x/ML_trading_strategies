@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "active_version": "v1_baseline",
+  "versions": {
+    "v1_baseline": {
+      "path": "experiments/v1_baseline",
+      "status": "completed",
+      "created": "2026-01-24",
+      "description": "Initial baseline PPO exit optimizer with default hyperparameters",
+      "git_commit": "5ab4664",
+      "sharpe": 0.69,
+      "return_pct": 9.46,
+      "max_dd_pct": 2.93,
+      "win_rate": 42.7,
+      "total_trades": 1325
+    }
+  }
+}

@@ -3,11 +3,13 @@
 EMA BB Scalp V2 RL Strategy Runner.
 
 Backtests the strategy with RL exit optimization.
+Supports versioned experiments for model and results management.
 
 Usage:
     python run.py -i AUDUSD -t 15M
     python run.py -i AUDUSD -t 15M --no-rl  # Use classical exits
     python run.py -i AUDUSD --all           # All timeframes
+    python run.py -i AUDUSD -t 15M --version v1_baseline  # Use specific version
 """
 
 import sys
@@ -38,9 +40,33 @@ DATA_DIR = Path("/Users/williamsmith/Python_local_Mac/01_trading_strategies/ML_t
 RESULTS_BASE = STRATEGY_DIR / "results"
 DEFAULT_TIMEFRAMES = ["15M", "1H", "4H"]
 
+# Global version state (set by main)
+_ACTIVE_VERSION = None
 
-def get_results_dir(instrument: str, timeframe: str) -> Path:
-    results_dir = RESULTS_BASE / instrument.upper() / timeframe.upper()
+
+def get_version_paths(version: str = None) -> dict:
+    """Get paths for a specific experiment version."""
+    if version:
+        exp_dir = STRATEGY_DIR / "experiments" / version
+        return {
+            'models': exp_dir / "models",
+            'results': exp_dir / "results",
+            'model_file': exp_dir / "models" / "exit_policy_final.pt",
+        }
+    else:
+        return {
+            'models': STRATEGY_DIR / "models",
+            'results': STRATEGY_DIR / "results",
+            'model_file': STRATEGY_DIR / "models" / "exit_policy_final.pt",
+        }
+
+
+def get_results_dir(instrument: str, timeframe: str, version: str = None) -> Path:
+    version = version or _ACTIVE_VERSION
+    if version:
+        results_dir = STRATEGY_DIR / "experiments" / version / "results" / instrument.upper() / timeframe.upper()
+    else:
+        results_dir = RESULTS_BASE / instrument.upper() / timeframe.upper()
     results_dir.mkdir(parents=True, exist_ok=True)
     return results_dir
 
@@ -73,13 +99,25 @@ def load_data(instrument: str, timeframe: str, start_date: str = "2010-01-01", e
 
 def run_single(instrument: str, timeframe: str, cash: float = 1_000_000,
                commission: float = 1.0, spread: float = 0.0, n_sims: int = 500,
-               params: dict = None, start_date: str = "2010-01-01", end_date: str = None) -> dict:
+               params: dict = None, start_date: str = "2010-01-01", end_date: str = None,
+               version: str = None) -> dict:
+    version = version or _ACTIVE_VERSION
+    version_str = f" [{version}]" if version else ""
+
     print("\n" + "=" * 60)
-    print(f" {STRATEGY_NAME} - {instrument} {timeframe}")
+    print(f" {STRATEGY_NAME} - {instrument} {timeframe}{version_str}")
     print("=" * 60)
 
     df = load_data(instrument, timeframe, start_date, end_date)
-    output_dir = get_results_dir(instrument, timeframe)
+    output_dir = get_results_dir(instrument, timeframe, version)
+
+    # Set model path based on version
+    if version:
+        model_path = STRATEGY_DIR / "experiments" / version / "models" / "exit_policy_final.pt"
+        if model_path.exists():
+            params = params or {}
+            params['model_path'] = str(model_path)
+            print(f"Using model: {model_path}")
 
     bt = Backtester(EMABBScalpV2RLStrategy, df, cash=cash, commission=commission,
                     spread=spread, params=params or {})
@@ -126,14 +164,15 @@ def run_single(instrument: str, timeframe: str, cash: float = 1_000_000,
     return {'stats': stats, 'mc_result': mc_result, 'output_dir': output_dir, 'trades_df': trades_df}
 
 
-def run_multi_timeframe(instrument: str, timeframes: list = None, **kwargs) -> dict:
+def run_multi_timeframe(instrument: str, timeframes: list = None, version: str = None, **kwargs) -> dict:
+    version = version or _ACTIVE_VERSION
     timeframes = timeframes or DEFAULT_TIMEFRAMES
     results = {}
     summary = []
 
     for tf in timeframes:
         try:
-            result = run_single(instrument, tf, **kwargs)
+            result = run_single(instrument, tf, version=version, **kwargs)
             results[tf] = result
             if result['mc_result']:
                 mc = result['mc_result'].metrics
@@ -162,21 +201,24 @@ def run_multi_timeframe(instrument: str, timeframes: list = None, **kwargs) -> d
     return results
 
 
-def compare_with_classical(instrument: str, timeframe: str, **kwargs) -> dict:
+def compare_with_classical(instrument: str, timeframe: str, version: str = None, **kwargs) -> dict:
     """Compare RL exits with classical exits."""
+    version = version or _ACTIVE_VERSION
+    version_str = f" [{version}]" if version else ""
+
     print("\n" + "=" * 70)
-    print(f" COMPARISON: RL vs Classical - {instrument} {timeframe}")
+    print(f" COMPARISON: RL vs Classical - {instrument} {timeframe}{version_str}")
     print("=" * 70)
 
     # Run with RL exits
     print("\n[RL Exits]")
     params_rl = {'use_rl_exit': True, 'use_ml': True}
-    result_rl = run_single(instrument, timeframe, params={**kwargs.get('params', {}), **params_rl}, **{k: v for k, v in kwargs.items() if k != 'params'})
+    result_rl = run_single(instrument, timeframe, version=version, params={**kwargs.get('params', {}), **params_rl}, **{k: v for k, v in kwargs.items() if k not in ['params', 'version']})
 
     # Run with classical exits
     print("\n[Classical Exits]")
     params_classical = {'use_rl_exit': False, 'use_ml': True}
-    result_classical = run_single(instrument, timeframe, params={**kwargs.get('params', {}), **params_classical}, **{k: v for k, v in kwargs.items() if k != 'params'})
+    result_classical = run_single(instrument, timeframe, version=version, params={**kwargs.get('params', {}), **params_classical}, **{k: v for k, v in kwargs.items() if k not in ['params', 'version']})
 
     # Compare
     if result_rl['mc_result'] and result_classical['mc_result']:
@@ -201,6 +243,8 @@ def compare_with_classical(instrument: str, timeframe: str, **kwargs) -> dict:
 
 
 def main():
+    global _ACTIVE_VERSION
+
     parser = argparse.ArgumentParser(description=f"Run {STRATEGY_NAME} Backtest")
     parser.add_argument('-i', '--instrument', default='AUDUSD', help='Currency pair')
     parser.add_argument('-t', '--timeframe', default='15M', help='Timeframe')
@@ -214,8 +258,22 @@ def main():
     parser.add_argument('--no-rl', action='store_true', help='Disable RL exits (use classical)')
     parser.add_argument('--no-ml', action='store_true', help='Disable ML entry filtering')
     parser.add_argument('--compare', action='store_true', help='Compare RL vs Classical')
+    parser.add_argument('--version', type=str, default=None, help='Experiment version (e.g., v1_baseline)')
 
     args = parser.parse_args()
+
+    # Set global version
+    _ACTIVE_VERSION = args.version
+
+    if args.version:
+        version_dir = STRATEGY_DIR / "experiments" / args.version
+        if not version_dir.exists():
+            print(f"Error: Version '{args.version}' not found at {version_dir}")
+            print("Available versions:")
+            for d in (STRATEGY_DIR / "experiments").iterdir():
+                if d.is_dir() and not d.name.startswith('.'):
+                    print(f"  - {d.name}")
+            return
 
     params = {
         'use_rl_exit': not args.no_rl,
@@ -229,7 +287,8 @@ def main():
         'n_sims': args.sims,
         'start_date': args.start,
         'end_date': args.end,
-        'params': params
+        'params': params,
+        'version': args.version,
     }
 
     if args.compare:
@@ -237,7 +296,12 @@ def main():
     elif args.all:
         run_multi_timeframe(args.instrument, **kwargs)
     else:
-        run_single(args.instrument, args.timeframe, **kwargs)
+        result = run_single(args.instrument, args.timeframe, **kwargs)
+
+        # Prompt to update results if using a version
+        if args.version and result.get('mc_result'):
+            print(f"\nTo update registry with these results, run:")
+            print(f"  python experiment_manager.py update-results {args.version}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,92 @@
+# Experiment Configuration - v1_baseline
+# =========================================
+# Initial PPO exit optimizer with default hyperparameters
+
+meta:
+  version: "v1"
+  name: "baseline"
+  description: "Initial PPO exit optimizer with default hyperparameters"
+  created: "2026-01-24T12:00:00Z"
+  author: "william"
+  git_commit: "5ab4664"
+  status: "completed"
+
+training:
+  # Data files (relative to strategy root)
+  train_episodes: "data/episodes_train_2005_2021.pkl"
+  test_episodes: "data/episodes_test_2022_2025.pkl"
+
+  # PPO Configuration
+  ppo:
+    n_envs: 64
+    max_episode_length: 200
+    state_dim: 25
+    action_dim: 5
+
+    # Core hyperparameters
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_epsilon: 0.2
+    target_kl: 0.015
+
+    # Training schedule
+    learning_rate: 0.0003
+    lr_end: 0.00001
+    lr_schedule: "linear"
+    n_epochs: 10
+    batch_size: 2048
+    n_steps: 2048
+    total_timesteps: 10000000
+
+    # Loss weights
+    value_coef: 0.5
+    max_grad_norm: 0.5
+
+    # Entropy annealing
+    entropy_coef_start: 0.05
+    entropy_coef_end: 0.001
+    entropy_anneal_steps: 5000000
+
+    # Network architecture
+    hidden_dims: [256, 256]
+    use_layer_norm: true
+    dropout: 0.0
+
+  # Reward Configuration
+  reward:
+    w_realized: 1.0
+    w_mtm: 0.1
+    risk_coef: 0.3
+    dd_threshold: 0.1
+    time_coef: 0.005
+    time_sigmoid_center: 100
+    regret_coef: 0.5
+    tighten_sl_cost: 0.001
+    trail_sl_cost: 0.0005
+    reward_scale: 100.0
+
+  # Infrastructure
+  device: "cuda"
+  wandb_project: "rl-exit-optimizer"
+
+evaluation:
+  instruments: ["AUDUSD"]
+  timeframes: ["15M"]
+  test_range: "2022-01-01 to 2025-01-01"
+  train_range: "2005-01-01 to 2021-12-31"
+
+results_summary:
+  # Backtest results (AUDUSD 15M, 2010-2025)
+  sharpe_ratio: 0.69
+  return_pct: 9.46
+  max_drawdown_pct: 2.93
+  win_rate: 42.7
+  total_trades: 1325
+  profit_factor: 1.09
+  cagr: 2.33
+
+changes_from_previous:
+  - "Initial baseline version"
+  - "PPO with entropy annealing (0.05 -> 0.001)"
+  - "Dense reward shaping (MTM + risk penalty)"
+  - "5-action space: HOLD, EXIT, TIGHTEN_SL, TRAIL_BE, PARTIAL"
