@@ -180,7 +180,8 @@ function initCharts() {
 // ============================================================================
 
 function connectWebSocket() {
-    ws = new WebSocket('ws://localhost:8765/ws');
+    // Use current host to support any port
+    ws = new WebSocket(`ws://${window.location.host}/ws`);
 
     ws.onopen = () => {
         document.getElementById('connection-status').className = 'status-dot connected';

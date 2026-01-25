@@ -201,7 +201,23 @@ async def run_server(config: VisualizerConfig, html_template: str):
 
     # Load model
     print(f"Loading model from {config.model_path}...")
-    strategy_dir = config.model_path.parent.parent
+
+    # Find the strategy directory containing model.py
+    # Walk up from the checkpoint until we find model.py
+    model_path = Path(config.model_path)
+    strategy_dir = model_path.parent.parent  # Start with assumption (models/ -> experiment/)
+
+    # Keep going up until we find model.py (up to 4 levels to avoid infinite loop)
+    for _ in range(4):
+        if (strategy_dir / 'model.py').exists():
+            break
+        strategy_dir = strategy_dir.parent
+    else:
+        # Fall back to strategy directory from config
+        from .config import REPO_ROOT
+        strategy_dir = REPO_ROOT / "strategies" / config.strategy_name
+
+    print(f"Using strategy directory: {strategy_dir}")
     model = load_model(config.model_path, strategy_dir, device)
 
     # Load data
