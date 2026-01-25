@@ -86,8 +86,8 @@ class RewardConfig:
 class PPOConfig:
     """PPO training configuration for v2_exit_guards."""
 
-    # Environment
-    n_envs: int = 64                 # Parallel environments (GPU saturation)
+    # Environment - OPTIMIZED for RTX 4090 GPU saturation
+    n_envs: int = 128                # Parallel environments (2x for better GPU util)
     max_episode_length: int = 200    # Max bars per trade
 
     # State/Action dimensions
@@ -106,7 +106,7 @@ class PPOConfig:
     lr_schedule: str = "linear"      # "linear", "cosine", or "constant"
 
     n_epochs: int = 10               # PPO epochs per rollout
-    batch_size: int = 2048           # Minibatch size
+    batch_size: int = 4096           # Minibatch size (2x for better GPU tensor core util)
     n_steps: int = 2048              # Steps per rollout (before update)
     total_timesteps: int = 10_000_000  # Total training steps
 
