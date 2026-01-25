@@ -310,10 +310,14 @@ class PPOTrainer:
         std_return = np.std(recent_returns)
         mean_length = np.mean(recent_lengths)
 
+        # Get counterfactual stats from env
+        cf_stats = self.env.get_counterfactual_stats()
+
         print(f"Update {update:5d}/{total_updates} | Steps: {self.total_steps:,}")
         print(f"  Return: {mean_return:8.3f} +/- {std_return:6.3f}")
         print(f"  Length: {mean_length:6.1f} | LR: {lr:.2e} | Ent: {entropy_coef:.4f}")
         print(f"  Loss: {metrics['policy_loss']:.4f} | KL: {metrics['approx_kl']:.4f} | Clip: {metrics['clip_fraction']:.3f}")
+        print(f"  Counterfactual: def_rate={cf_stats['defensive_rate']:.2%} prem_rate={cf_stats['premature_rate']:.2%}")
         print()
 
         if self.use_wandb:
@@ -329,6 +333,12 @@ class PPOTrainer:
                 'train/learning_rate': lr,
                 'train/entropy_coef': entropy_coef,
                 'train/total_steps': self.total_steps,
+                # V2 counterfactual stats
+                'counterfactual/defensive_rate': cf_stats['defensive_rate'],
+                'counterfactual/premature_rate': cf_stats['premature_rate'],
+                'counterfactual/avg_defensive_bonus': cf_stats['avg_defensive_bonus'],
+                'counterfactual/avg_opportunity_cost': cf_stats['avg_opportunity_cost'],
+                'counterfactual/total_exits': cf_stats['total_exits'],
             }, step=self.total_steps)
 
         if mean_return > self.best_return and len(self.episode_returns) > 50:

@@ -49,12 +49,12 @@ class RewardConfig:
     #   - Exit at +10 pips, price drops → GOOD (defensive bonus)
 
     # Opportunity cost: penalize missing future gains
-    # (replaces old regret_coef which used optimal_pnl)
-    regret_coef: float = 0.5
+    # INCREASED from 0.5 to 2.0 to make signal stronger
+    regret_coef: float = 2.0
 
     # Defensive bonus: reward avoiding future losses
-    # Equal to regret_coef for Sharpe-optimized balance
-    defensive_coef: float = 0.5
+    # INCREASED from 0.5 to 2.0 to make signal stronger
+    defensive_coef: float = 2.0
 
     # How far ahead to look for counterfactual (in bars)
     # 20 bars @ 15M = 5 hours = reasonable trade horizon

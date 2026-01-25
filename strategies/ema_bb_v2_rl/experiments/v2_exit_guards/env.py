@@ -269,8 +269,8 @@ class VectorizedExitEnv:
                     missed_gain = max(0, future_best - pnl)
                     opportunity_cost = missed_gain * cfg.regret_coef
 
-                    # Net counterfactual adjustment
-                    counterfactual_reward[idx] = defensive_bonus - opportunity_cost
+                    # Net counterfactual adjustment - SCALE TO MATCH BASE REWARD
+                    counterfactual_reward[idx] = (defensive_bonus - opportunity_cost) * cfg.reward_scale
 
                     # Track statistics
                     self.total_exits += 1
@@ -281,8 +281,8 @@ class VectorizedExitEnv:
                     self.total_defensive_bonus += defensive_bonus
                     self.total_opportunity_cost += opportunity_cost
 
-            # Apply tiny exit cost to all exits
-            counterfactual_reward[idx] -= cfg.exit_cost
+            # Apply tiny exit cost to all exits (also scaled)
+            counterfactual_reward[idx] -= cfg.exit_cost * cfg.reward_scale
 
         return counterfactual_reward
 
@@ -306,6 +306,22 @@ class VectorizedExitEnv:
         dones = torch.zeros(self.n_envs, dtype=torch.bool, device=self.device)
 
         cfg = self.reward_config
+
+        # ================================================================
+        # HOLD action (0) - Small bonus for patience
+        # ================================================================
+        hold_mask = (actions == Actions.HOLD) & self.position_open
+        if hold_mask.any():
+            # Base hold bonus - small constant to encourage exploration
+            # This makes HOLD not always the worst option
+            rewards[hold_mask] += 0.005 * cfg.reward_scale  # +0.5 per hold
+
+            # Additional bonus when position is improving
+            improving = unrealized_pnl > self.max_adverse + 0.001
+            in_profit = unrealized_pnl > 0
+            hold_bonus_mask = hold_mask & (improving | in_profit)
+            if hold_bonus_mask.any():
+                rewards[hold_bonus_mask] += 0.01 * cfg.reward_scale * unrealized_pnl[hold_bonus_mask].clamp(min=0)
 
         # ================================================================
         # EXIT action (1) - NO GUARDS, uses counterfactual rewards
@@ -453,9 +469,11 @@ class VectorizedExitEnv:
             self.reward_var += (delta * delta2)
 
         # Time Decay (REDUCED in v2: 0.002 vs 0.005)
+        # Only apply after bar 3 to give model time to learn counterfactual
         bars = self.current_bar.float()
+        time_active = (bars > 3).float()  # No penalty for first 3 bars
         time_penalty = 1.0 / (1.0 + torch.exp(-0.05 * (bars - cfg.time_sigmoid_center)))
-        rewards -= cfg.time_coef * time_penalty * (~dones).float()
+        rewards -= cfg.time_coef * time_penalty * time_active * (~dones).float()
 
         # Drawdown Penalty
         in_drawdown = (self.max_favorable - unrealized_pnl) > cfg.dd_threshold
