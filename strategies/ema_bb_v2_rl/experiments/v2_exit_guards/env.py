@@ -1,8 +1,13 @@
 """
 Vectorized GPU Environment for v2_exit_guards experiment.
 
-Uses the FROZEN config from this experiment directory.
-The key difference from v1: EXIT guards are ENABLED.
+KEY INNOVATION: Counterfactual rewards instead of hard guards.
+
+When the model exits, we look at what happens AFTER:
+- If price drops below exit_pnl → defensive bonus (good exit, avoided loss)
+- If price rises above exit_pnl → opportunity cost (bad exit, missed gain)
+
+This naturally teaches the model WHEN to exit without blocking actions.
 """
 
 import torch
@@ -105,10 +110,12 @@ class EpisodeDataset:
 
 class VectorizedExitEnv:
     """
-    Vectorized environment for v2_exit_guards.
+    Vectorized environment for v2_exit_guards with counterfactual rewards.
 
-    KEY DIFFERENCE from v1: EXIT action has guards enabled.
-    Model cannot EXIT at Bar 0 with 0 pips anymore.
+    KEY DIFFERENCE from v1:
+    - NO hard guards on EXIT or PARTIAL
+    - Counterfactual rewards teach when exits are good/bad
+    - Tiny exit cost discourages truly wasteful exits
     """
 
     def __init__(
@@ -147,11 +154,12 @@ class VectorizedExitEnv:
         self.episode_returns = torch.zeros(self.n_envs, device=self.device)
         self.episode_lengths = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
 
-        # Stats for monitoring guard effectiveness
-        self.blocked_exits = 0
-        self.blocked_partials = 0
-        self.total_exit_attempts = 0
-        self.total_partial_attempts = 0
+        # Stats for monitoring counterfactual rewards
+        self.total_exits = 0
+        self.defensive_exits = 0  # Exits where we avoided future loss
+        self.premature_exits = 0  # Exits where we missed future gain
+        self.total_defensive_bonus = 0.0
+        self.total_opportunity_cost = 0.0
 
     def reset(self, episode_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Reset all environments to new random episodes."""
@@ -207,11 +215,82 @@ class VectorizedExitEnv:
 
         return state
 
+    def _compute_counterfactual_reward(
+        self,
+        exit_pnl: torch.Tensor,
+        episode_indices: torch.Tensor,
+        current_bar: torch.Tensor,
+        exit_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute counterfactual rewards for exits.
+
+        For each exit:
+        1. Look at next N bars (counterfactual_lookforward)
+        2. Compute defensive bonus if we avoided future loss
+        3. Compute opportunity cost if we missed future gain
+        4. Apply tiny exit cost
+
+        Returns:
+            Additional reward adjustment for exiting environments
+        """
+        cfg = self.reward_config
+        lookforward = cfg.counterfactual_lookforward
+
+        # Initialize reward adjustment
+        counterfactual_reward = torch.zeros(self.n_envs, device=self.device)
+
+        if not exit_mask.any():
+            return counterfactual_reward
+
+        # Get indices of exiting environments
+        exit_indices = exit_mask.nonzero(as_tuple=True)[0]
+
+        for idx in exit_indices:
+            ep_idx = episode_indices[idx].item()
+            bar = current_bar[idx].item()
+            pnl = exit_pnl[idx].item()
+
+            # Get future PnLs (what would have happened if we held)
+            end_bar = min(bar + lookforward, self.max_bars)
+
+            if end_bar > bar:
+                future_pnls = self.dataset.market_tensors[ep_idx, bar:end_bar, 0]
+
+                if len(future_pnls) > 0:
+                    future_worst = future_pnls.min().item()
+                    future_best = future_pnls.max().item()
+
+                    # Defensive bonus: reward if we avoided a future drawdown
+                    avoided_loss = max(0, pnl - future_worst)
+                    defensive_bonus = avoided_loss * cfg.defensive_coef
+
+                    # Opportunity cost: penalize if we missed future gains
+                    missed_gain = max(0, future_best - pnl)
+                    opportunity_cost = missed_gain * cfg.regret_coef
+
+                    # Net counterfactual adjustment
+                    counterfactual_reward[idx] = defensive_bonus - opportunity_cost
+
+                    # Track statistics
+                    self.total_exits += 1
+                    if avoided_loss > 0:
+                        self.defensive_exits += 1
+                    if missed_gain > 0:
+                        self.premature_exits += 1
+                    self.total_defensive_bonus += defensive_bonus
+                    self.total_opportunity_cost += opportunity_cost
+
+            # Apply tiny exit cost to all exits
+            counterfactual_reward[idx] -= cfg.exit_cost
+
+        return counterfactual_reward
+
     def step(
         self,
         actions: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
-        """Execute actions with v2 EXIT guards enabled."""
+        """Execute actions with counterfactual rewards (no hard guards)."""
 
         # Update action history
         self.action_history = torch.roll(self.action_history, -1, dims=1)
@@ -229,32 +308,25 @@ class VectorizedExitEnv:
         cfg = self.reward_config
 
         # ================================================================
-        # EXIT action (1) - WITH GUARDS ENABLED (v2 change)
+        # EXIT action (1) - NO GUARDS, uses counterfactual rewards
         # ================================================================
         exit_mask = (actions == Actions.EXIT) & self.position_open
 
         if exit_mask.any():
-            self.total_exit_attempts += exit_mask.sum().item()
+            # Base reward: realized PnL
+            rewards[exit_mask] = unrealized_pnl[exit_mask] * cfg.reward_scale
 
-            # Guards: must meet profit AND bars requirements
-            exit_allowed = (unrealized_pnl >= cfg.min_profit_for_exit) & \
-                          (self.current_bar >= cfg.min_bars_for_exit)
+            # Counterfactual adjustment (defensive bonus - opportunity cost - exit cost)
+            cf_reward = self._compute_counterfactual_reward(
+                unrealized_pnl, self.episode_indices, self.current_bar, exit_mask
+            )
+            rewards += cf_reward
 
-            valid_exit = exit_mask & exit_allowed
-            invalid_exit = exit_mask & ~exit_allowed
-
-            if valid_exit.any():
-                rewards[valid_exit] = unrealized_pnl[valid_exit] * cfg.reward_scale
-                dones[valid_exit] = True
-                self.position_open[valid_exit] = False
-
-            if invalid_exit.any():
-                # Convert to HOLD + penalty
-                self.blocked_exits += invalid_exit.sum().item()
-                rewards[invalid_exit] -= cfg.invalid_action_penalty
+            dones[exit_mask] = True
+            self.position_open[exit_mask] = False
 
         # ================================================================
-        # TIGHTEN_SL action (2) - no guards needed
+        # TIGHTEN_SL action (2)
         # ================================================================
         tighten_mask = (actions == Actions.TIGHTEN_SL) & self.position_open
         if tighten_mask.any():
@@ -262,7 +334,7 @@ class VectorizedExitEnv:
             rewards[tighten_mask] -= cfg.tighten_sl_cost
 
         # ================================================================
-        # TRAIL_BREAKEVEN action (3) - already has profit guard
+        # TRAIL_BREAKEVEN action (3)
         # ================================================================
         trail_mask = (actions == Actions.TRAIL_BREAKEVEN) & self.position_open
         in_profit = unrealized_pnl > 0
@@ -272,28 +344,22 @@ class VectorizedExitEnv:
             rewards[trail_and_profit] -= cfg.trail_sl_cost
 
         # ================================================================
-        # PARTIAL_EXIT (4) - WITH STRENGTHENED GUARDS (v2 change)
+        # PARTIAL_EXIT (4) - NO GUARDS, uses counterfactual rewards
         # ================================================================
         partial_mask = (actions == Actions.PARTIAL_EXIT) & self.position_open
 
         if partial_mask.any():
-            self.total_partial_attempts += partial_mask.sum().item()
+            # Base reward: realized PnL
+            rewards[partial_mask] = unrealized_pnl[partial_mask] * cfg.reward_scale
 
-            # Guards: must have minimum profit AND minimum bars held
-            partial_allowed = (unrealized_pnl >= cfg.min_profit_for_partial) & \
-                             (self.current_bar >= cfg.min_bars_for_partial)
+            # Counterfactual adjustment
+            cf_reward = self._compute_counterfactual_reward(
+                unrealized_pnl, self.episode_indices, self.current_bar, partial_mask
+            )
+            rewards += cf_reward
 
-            valid_partial = partial_mask & partial_allowed
-            invalid_partial = partial_mask & ~partial_allowed
-
-            if valid_partial.any():
-                rewards[valid_partial] = unrealized_pnl[valid_partial] * cfg.reward_scale
-                dones[valid_partial] = True
-                self.position_open[valid_partial] = False
-
-            if invalid_partial.any():
-                self.blocked_partials += invalid_partial.sum().item()
-                rewards[invalid_partial] -= cfg.invalid_action_penalty
+            dones[partial_mask] = True
+            self.position_open[partial_mask] = False
 
         # Advance Time
         self.current_bar += 1
@@ -311,7 +377,7 @@ class VectorizedExitEnv:
         sl_hit = (next_pnl < sl_pnl_threshold) & self.position_open & ~dones
 
         if sl_hit.any():
-            rewards[sl_hit] = sl_pnl_threshold[sl_hit] * self.reward_config.reward_scale
+            rewards[sl_hit] = sl_pnl_threshold[sl_hit] * cfg.reward_scale
             dones[sl_hit] = True
             self.position_open[sl_hit] = False
 
@@ -320,11 +386,11 @@ class VectorizedExitEnv:
         episode_end = ~valid_mask & self.position_open & ~dones
 
         if episode_end.any():
-            rewards[episode_end] = next_pnl[episode_end] * self.reward_config.reward_scale
+            rewards[episode_end] = next_pnl[episode_end] * cfg.reward_scale
             dones[episode_end] = True
             self.position_open[episode_end] = False
 
-        # Apply Reward Shaping (with reduced time penalty)
+        # Apply standard reward shaping (time penalty, drawdown penalty)
         rewards = self._shape_reward(rewards, actions, unrealized_pnl, dones)
 
         # Track episode returns
@@ -367,23 +433,17 @@ class VectorizedExitEnv:
         unrealized_pnl: torch.Tensor,
         dones: torch.Tensor,
     ) -> torch.Tensor:
-        """Apply reward shaping with v2 parameters (reduced time penalty)."""
+        """Apply standard reward shaping (time penalty, drawdown penalty)."""
         rewards = base_reward.clone()
         cfg = self.reward_config
 
-        # Differential Sharpe
+        # Differential Sharpe (for non-terminal states)
         if self.reward_count > 100:
             sharpe_bonus = (unrealized_pnl - self.reward_mean) / (np.sqrt(self.reward_var) + 1e-8)
             rewards += cfg.w_mtm * sharpe_bonus * (~dones).float()
 
-        # Regret Penalty (INCREASED in v2: 0.8 vs 0.5)
+        # Update reward statistics on exits
         if dones.any():
-            optimal_pnls = self.dataset.optimal_pnls[self.episode_indices[dones]]
-            realized_pnls = unrealized_pnl[dones]
-            regret = (optimal_pnls - realized_pnls).clamp(min=0)
-            rewards[dones] -= cfg.regret_coef * regret
-
-            # Update reward statistics
             new_returns = base_reward[dones]
             n = len(new_returns)
             self.reward_count += n
@@ -404,14 +464,21 @@ class VectorizedExitEnv:
 
         return rewards
 
-    def get_guard_stats(self) -> Dict[str, float]:
-        """Get statistics on how often guards are blocking actions."""
-        exit_block_rate = self.blocked_exits / max(1, self.total_exit_attempts)
-        partial_block_rate = self.blocked_partials / max(1, self.total_partial_attempts)
+    def get_counterfactual_stats(self) -> Dict[str, float]:
+        """Get statistics on counterfactual rewards."""
+        if self.total_exits == 0:
+            return {
+                'defensive_rate': 0.0,
+                'premature_rate': 0.0,
+                'avg_defensive_bonus': 0.0,
+                'avg_opportunity_cost': 0.0,
+                'total_exits': 0,
+            }
 
         return {
-            'exit_block_rate': exit_block_rate,
-            'partial_block_rate': partial_block_rate,
-            'total_blocked_exits': self.blocked_exits,
-            'total_blocked_partials': self.blocked_partials,
+            'defensive_rate': self.defensive_exits / self.total_exits,
+            'premature_rate': self.premature_exits / self.total_exits,
+            'avg_defensive_bonus': self.total_defensive_bonus / self.total_exits,
+            'avg_opportunity_cost': self.total_opportunity_cost / self.total_exits,
+            'total_exits': self.total_exits,
         }

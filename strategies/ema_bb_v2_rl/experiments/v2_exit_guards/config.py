@@ -2,11 +2,14 @@
 Configuration for v2_exit_guards experiment.
 
 FROZEN SNAPSHOT - Do not modify after training begins.
-Changes from v1_baseline:
-1. EXIT guards enabled (min_profit=0.001, min_bars=2)
-2. PARTIAL guards strengthened (min_profit=0.002, min_bars=2)
-3. Reduced time penalty (0.002 vs 0.005) - less incentive for early exits
-4. Increased regret coefficient (0.8 vs 0.5) - penalize missing optimal exit more
+
+Key Changes from v1:
+1. NO hard guards (removed min_profit, min_bars requirements)
+2. Counterfactual rewards: defensive bonus + opportunity cost
+3. Tiny transaction cost to discourage wasteful 0-pip exits
+4. Equal defensive/regret weights - Sharpe-optimized
+
+The model learns WHEN to exit through reward signals, not hard blocks.
 """
 
 from dataclasses import dataclass, field
@@ -26,14 +29,50 @@ class RewardConfig:
     risk_coef: float = 0.3           # Drawdown penalty coefficient
     dd_threshold: float = 0.1        # Drawdown penalty kicks in after this %
 
-    # Time management - REDUCED from 0.005 to 0.002
-    # Lower value = less incentive to exit early just to avoid time penalty
+    # Time management - REDUCED from v1 (0.005)
+    # Lower value = less incentive to exit just to avoid time penalty
     time_coef: float = 0.002
     time_sigmoid_center: float = 100 # Bars at which time penalty is 50%
 
-    # Regret penalty - INCREASED from 0.5 to 0.8
-    # Higher value = more penalty for exiting before optimal
-    regret_coef: float = 0.8
+    # ==========================================================================
+    # COUNTERFACTUAL REWARDS - The core v2 innovation
+    # ==========================================================================
+    # Instead of hard guards, we use forward-looking rewards to steer behavior.
+    #
+    # When model exits:
+    #   1. Look at what happens AFTER the exit (next N bars)
+    #   2. If price drops below exit_pnl → defensive bonus (good exit)
+    #   3. If price rises above exit_pnl → opportunity cost (bad exit)
+    #
+    # This naturally teaches:
+    #   - Exit at 0 pips, price goes up → BAD (opportunity cost)
+    #   - Exit at +10 pips, price drops → GOOD (defensive bonus)
+
+    # Opportunity cost: penalize missing future gains
+    # (replaces old regret_coef which used optimal_pnl)
+    regret_coef: float = 0.5
+
+    # Defensive bonus: reward avoiding future losses
+    # Equal to regret_coef for Sharpe-optimized balance
+    defensive_coef: float = 0.5
+
+    # How far ahead to look for counterfactual (in bars)
+    # 20 bars @ 15M = 5 hours = reasonable trade horizon
+    counterfactual_lookforward: int = 20
+
+    # Tiny transaction cost for all exits
+    # Makes 0-pip exits slightly negative, discourages wasteful exits
+    # 0.0001 ≈ 0.1 pip normalized (very small)
+    exit_cost: float = 0.0001
+
+    # ==========================================================================
+    # REMOVED: Hard guards (these were blocking legitimate defensive exits)
+    # ==========================================================================
+    # min_profit_for_exit - REMOVED
+    # min_bars_for_exit - REMOVED
+    # min_profit_for_partial - REMOVED
+    # min_bars_for_partial - REMOVED
+    # invalid_action_penalty - REMOVED
 
     # Action costs (prevent excessive adjustments)
     tighten_sl_cost: float = 0.001
@@ -41,23 +80,6 @@ class RewardConfig:
 
     # Reward scaling
     reward_scale: float = 100.0      # Scale factor for stable gradients
-
-    # ==========================================================================
-    # ACTION GUARDS - ENABLED FOR V2
-    # ==========================================================================
-    # Problem solved: Model was exiting at Bar 0 with 0 pips to avoid time penalty
-    # Solution: Block exits unless profit AND holding time requirements are met
-
-    # EXIT guards - NOW ENABLED (was 0.0 and 0 in v1)
-    min_profit_for_exit: float = 0.001    # ~10 pips minimum for EXIT
-    min_bars_for_exit: int = 2            # Must hold at least 2 bars
-
-    # PARTIAL guards - STRENGTHENED (was 0.001 and 1 in v1)
-    min_profit_for_partial: float = 0.002  # ~20 pips minimum for PARTIAL
-    min_bars_for_partial: int = 2          # Must hold at least 2 bars
-
-    # Penalty for attempting blocked actions
-    invalid_action_penalty: float = 0.02   # Higher penalty than v1 (was 0.01)
 
 
 @dataclass
