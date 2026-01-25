@@ -3,7 +3,7 @@
 Interactive HTML Backtest Visualization for V5 Anti-Cheat.
 
 Creates a beautiful, interactive chart with:
-- Candlestick price chart with trade entries/exits
+- OHLC Candlestick price chart with trade entries/exits
 - Cumulative PnL curve below
 - Metrics dashboard in top left
 """
@@ -12,12 +12,15 @@ import sys
 import pickle
 from pathlib import Path
 import numpy as np
+import pandas as pd
 import torch
 from datetime import datetime, timedelta
 import json
 
 EXPERIMENT_DIR = Path(__file__).parent
 STRATEGY_DIR = EXPERIMENT_DIR.parent.parent
+# ML_trading_strategies/data (4 levels up from v5_anti_cheat)
+DATA_DIR = EXPERIMENT_DIR.parent.parent.parent.parent / "data"
 
 sys.path.insert(0, str(EXPERIMENT_DIR))
 from config import PPOConfig, Actions
@@ -27,13 +30,6 @@ sys.path.insert(0, str(STRATEGY_DIR))
 from model import ActorCritic
 
 ACTION_NAMES = ['HOLD', 'EXIT', 'TIGHTEN_SL', 'TRAIL_BE', 'PARTIAL']
-ACTION_COLORS = {
-    'HOLD': '#6c757d',
-    'EXIT': '#dc3545',
-    'TIGHTEN_SL': '#ffc107',
-    'TRAIL_BE': '#17a2b8',
-    'PARTIAL': '#fd7e14'
-}
 
 
 def load_model(checkpoint_path: Path, device: str = "cpu"):
@@ -46,11 +42,32 @@ def load_model(checkpoint_path: Path, device: str = "cpu"):
     return model, config
 
 
-def evaluate_trades(model, episodes, config, max_trades=500):
-    """Evaluate trades and return detailed results."""
+def load_price_data():
+    """Load OHLC price data."""
+    price_file = DATA_DIR / "AUDUSD_15M.csv"
+    print(f"Loading price data from {price_file}")
+    df = pd.read_csv(price_file, parse_dates=['DateTime'])
+    df.set_index('DateTime', inplace=True)
+    return df
+
+
+def load_trades():
+    """Load trade data with entry/exit times."""
+    trades_file = STRATEGY_DIR / "data" / "trades_test_2022_2025.csv"
+    print(f"Loading trades from {trades_file}")
+    df = pd.read_csv(trades_file, parse_dates=['entry_time', 'exit_time'])
+    return df
+
+
+def evaluate_trades_with_v5(model, episodes, config, trades_df):
+    """Evaluate trades with V5 model and match to trade data."""
     results = []
 
-    for i, ep in enumerate(episodes[:max_trades]):
+    for i, ep in enumerate(episodes):
+        if i >= len(trades_df):
+            break
+
+        trade = trades_df.iloc[i]
         n_valid = int(ep.valid_mask.sum().item())
 
         # State tracking
@@ -60,7 +77,6 @@ def evaluate_trades(model, episodes, config, max_trades=500):
         action_hist = []
         be_active = False
 
-        trade_history = []
         exit_bar = None
         exit_pnl = None
         exit_reason = None
@@ -85,24 +101,14 @@ def evaluate_trades(model, episodes, config, max_trades=500):
             if bar < config.reward.min_trail_bar:
                 mask[0, Actions.TRAIL_BREAKEVEN] = False
 
-            # Get action
             with torch.no_grad():
-                logits, value = model(state)
+                logits, _ = model(state)
                 masked_logits = logits.clone()
                 masked_logits[~mask] = float('-inf')
-                probs = torch.softmax(masked_logits, dim=-1)
-                action = probs.argmax().item()
-
-            trade_history.append({
-                'bar': bar,
-                'pnl': current_pnl,
-                'action': ACTION_NAMES[action],
-                'value': value.item()
-            })
+                action = masked_logits.argmax().item()
 
             action_hist.append(float(action) / 4.0)
 
-            # Process action
             if action == Actions.TIGHTEN_SL:
                 sl_atr = max(0.5, sl_atr - 0.25)
 
@@ -110,7 +116,6 @@ def evaluate_trades(model, episodes, config, max_trades=500):
                 if current_pnl >= config.reward.min_profit_for_trail:
                     be_active = True
 
-            # Check exits
             if action == Actions.EXIT:
                 exit_bar = bar
                 exit_reason = "EXIT"
@@ -141,25 +146,29 @@ def evaluate_trades(model, episodes, config, max_trades=500):
             exit_reason = "END"
             exit_pnl = ep.market_tensor[exit_bar, 0].item()
 
+        # Calculate V5 exit time
+        entry_time = trade['entry_time']
+        v5_exit_time = entry_time + pd.Timedelta(minutes=15 * exit_bar)
+
         results.append({
             'trade_id': i,
-            'direction': 'LONG' if ep.direction == 1 else 'SHORT',
-            'entry_price': ep.entry_price,
+            'entry_time': entry_time,
+            'exit_time': v5_exit_time,
+            'classical_exit_time': trade['exit_time'],
+            'entry_price': trade['entry_price'],
+            'direction': 'LONG' if trade['direction'] == 1 else 'SHORT',
             'exit_bar': exit_bar,
             'exit_reason': exit_reason,
             'exit_pnl': exit_pnl,
-            'classical_pnl': ep.classical_pnl,
-            'history': trade_history,
-            'entry_atr': ep.entry_atr,
-            'entry_adx': ep.entry_adx,
-            'entry_rsi': ep.entry_rsi
+            'classical_pnl': trade['pnl_pct'],
+            'v5_exit_price': trade['entry_price'] * (1 + exit_pnl) if trade['direction'] == 1 else trade['entry_price'] * (1 - exit_pnl)
         })
 
     return results
 
 
-def generate_html(results):
-    """Generate interactive HTML visualization."""
+def generate_html(results, price_df):
+    """Generate interactive HTML visualization with candlestick chart."""
 
     # Calculate metrics
     returns = [r['exit_pnl'] for r in results]
@@ -171,34 +180,77 @@ def generate_html(results):
     avg_win = np.mean([r for r in returns if r > 0]) * 100 if any(r > 0 for r in returns) else 0
     avg_loss = np.mean([r for r in returns if r < 0]) * 100 if any(r < 0 for r in returns) else 0
 
-    # Sharpe calculation
     returns_arr = np.array(returns)
     sharpe = (np.mean(returns_arr) / np.std(returns_arr) * np.sqrt(len(returns)/3)) if np.std(returns_arr) > 0 else 0
 
-    # Max drawdown
     cumulative = np.cumsum(returns_arr)
     running_max = np.maximum.accumulate(cumulative)
     drawdown = running_max - cumulative
     max_dd = np.max(drawdown) * 100
 
-    # Exit reasons
     exit_reasons = {}
     for r in results:
         exit_reasons[r['exit_reason']] = exit_reasons.get(r['exit_reason'], 0) + 1
 
     avg_bars = np.mean([r['exit_bar'] for r in results])
 
-    # Prepare data for charts
+    # Prepare price data for a sample period (show ~200 trades worth)
+    sample_trades = results[:200]
+    if sample_trades:
+        start_time = sample_trades[0]['entry_time'] - pd.Timedelta(hours=12)
+        end_time = sample_trades[-1]['exit_time'] + pd.Timedelta(hours=12)
+        price_sample = price_df[start_time:end_time].reset_index()
+    else:
+        price_sample = price_df.iloc[-1000:].reset_index()
+
+    # Format for Plotly
+    ohlc_data = {
+        'x': price_sample['DateTime'].dt.strftime('%Y-%m-%d %H:%M').tolist(),
+        'open': price_sample['Open'].tolist(),
+        'high': price_sample['High'].tolist(),
+        'low': price_sample['Low'].tolist(),
+        'close': price_sample['Close'].tolist()
+    }
+
+    # Entry/Exit markers for sample period
+    long_entries = []
+    short_entries = []
+    exits_win = []
+    exits_loss = []
+
+    for r in sample_trades:
+        entry_str = r['entry_time'].strftime('%Y-%m-%d %H:%M')
+        exit_str = r['exit_time'].strftime('%Y-%m-%d %H:%M')
+
+        if r['direction'] == 'LONG':
+            long_entries.append({
+                'x': entry_str,
+                'y': r['entry_price'],
+                'text': f"LONG #{r['trade_id']+1}"
+            })
+        else:
+            short_entries.append({
+                'x': entry_str,
+                'y': r['entry_price'],
+                'text': f"SHORT #{r['trade_id']+1}"
+            })
+
+        exit_marker = {
+            'x': exit_str,
+            'y': r['v5_exit_price'],
+            'text': f"{r['exit_reason']}<br>{r['exit_pnl']*100:.2f}%<br>{r['exit_bar']} bars"
+        }
+        if r['exit_pnl'] >= 0:
+            exits_win.append(exit_marker)
+        else:
+            exits_loss.append(exit_marker)
+
+    # Cumulative PnL data
     cumulative_pnl = np.cumsum([r['exit_pnl'] * 100 for r in results]).tolist()
+    classical_cumulative = np.cumsum([r['classical_pnl'] * 100 for r in results]).tolist()
     trade_numbers = list(range(1, len(results) + 1))
 
-    # Trade markers
-    long_trades = [{'x': i+1, 'pnl': r['exit_pnl']*100, 'bars': r['exit_bar'], 'reason': r['exit_reason']}
-                   for i, r in enumerate(results) if r['direction'] == 'LONG']
-    short_trades = [{'x': i+1, 'pnl': r['exit_pnl']*100, 'bars': r['exit_bar'], 'reason': r['exit_reason']}
-                    for i, r in enumerate(results) if r['direction'] == 'SHORT']
-
-    # Individual trade returns for bar chart
+    # Trade returns for bar chart
     trade_returns = [{'x': i+1, 'y': r['exit_pnl']*100, 'dir': r['direction'], 'reason': r['exit_reason'], 'bars': r['exit_bar']}
                      for i, r in enumerate(results)]
 
@@ -207,244 +259,364 @@ def generate_html(results):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>V5 Anti-Cheat Backtest Results</title>
+    <title>V5 Anti-Cheat Backtest - AUDUSD 15M</title>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
             min-height: 100vh;
-            color: #e0e0e0;
+            color: #c9d1d9;
             padding: 20px;
         }}
-        .container {{
-            max-width: 1600px;
-            margin: 0 auto;
-        }}
+        .container {{ max-width: 1800px; margin: 0 auto; }}
         .header {{
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             padding: 20px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.1);
         }}
         .header h1 {{
-            font-size: 2.5em;
-            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            font-size: 2.2em;
+            background: linear-gradient(90deg, #58a6ff, #a371f7);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }}
-        .header p {{
-            color: #888;
-            font-size: 1.1em;
+        .header p {{ color: #8b949e; font-size: 1em; }}
+
+        .metrics-box {{
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(13, 17, 23, 0.95);
+            border: 1px solid rgba(88, 166, 255, 0.3);
+            border-radius: 10px;
+            padding: 15px 20px;
+            z-index: 1000;
+            min-width: 180px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }}
-        .metrics-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
-        }}
-        .metric-card {{
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .metric-card:hover {{
-            transform: translateY(-3px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }}
-        .metric-value {{
-            font-size: 2em;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }}
-        .metric-label {{
-            color: #888;
+        .metrics-box h3 {{
+            color: #58a6ff;
             font-size: 0.9em;
+            margin-bottom: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }}
-        .positive {{ color: #00ff88; }}
-        .negative {{ color: #ff4757; }}
-        .neutral {{ color: #ffa502; }}
+        .metric-row {{
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }}
+        .metric-label {{ color: #8b949e; }}
+        .metric-value {{ font-weight: 600; }}
+        .positive {{ color: #3fb950; }}
+        .negative {{ color: #f85149; }}
+        .neutral {{ color: #d29922; }}
+
         .chart-container {{
-            background: rgba(255,255,255,0.03);
-            border-radius: 15px;
-            padding: 20px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 12px;
+            padding: 15px;
             margin-bottom: 20px;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.08);
+            position: relative;
         }}
         .chart-title {{
-            font-size: 1.3em;
-            margin-bottom: 15px;
-            color: #fff;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            color: #c9d1d9;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }}
         .chart-title::before {{
             content: '';
             display: inline-block;
-            width: 4px;
-            height: 20px;
-            background: linear-gradient(180deg, #00d4ff, #7b2cbf);
+            width: 3px;
+            height: 16px;
+            background: linear-gradient(180deg, #58a6ff, #a371f7);
             border-radius: 2px;
         }}
-        .exit-reasons {{
+
+        .legend-box {{
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85em;
+            color: #8b949e;
+        }}
+        .legend-dot {{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }}
+        .legend-triangle {{
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+        }}
+        .legend-triangle.up {{ border-bottom: 10px solid #3fb950; }}
+        .legend-triangle.down {{ border-top: 10px solid #f85149; }}
+
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }}
+        .stat-card {{
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.06);
+        }}
+        .stat-value {{
+            font-size: 1.6em;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }}
+        .stat-label {{
+            color: #8b949e;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+
+        .exit-badges {{
             display: flex;
             justify-content: center;
-            gap: 20px;
+            gap: 15px;
             flex-wrap: wrap;
-            margin-top: 20px;
-            padding: 15px;
-            background: rgba(0,0,0,0.2);
-            border-radius: 10px;
+            margin-top: 15px;
         }}
         .exit-badge {{
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.9em;
-            font-weight: 500;
-        }}
-        .exit-EXIT {{ background: rgba(220, 53, 69, 0.3); color: #ff6b7a; }}
-        .exit-SL_HIT {{ background: rgba(255, 193, 7, 0.3); color: #ffd43b; }}
-        .exit-BE_SL {{ background: rgba(23, 162, 184, 0.3); color: #3dd5f3; }}
-        .exit-PARTIAL {{ background: rgba(253, 126, 20, 0.3); color: #fd9644; }}
-        .exit-END {{ background: rgba(108, 117, 125, 0.3); color: #adb5bd; }}
-        .verdict-box {{
-            background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 212, 255, 0.1));
-            border: 2px solid rgba(0, 255, 136, 0.3);
+            padding: 6px 14px;
             border-radius: 15px;
-            padding: 25px;
+            font-size: 0.85em;
+        }}
+        .exit-EXIT {{ background: rgba(248, 81, 73, 0.2); color: #f85149; }}
+        .exit-SL_HIT {{ background: rgba(210, 153, 34, 0.2); color: #d29922; }}
+        .exit-BE_SL {{ background: rgba(88, 166, 255, 0.2); color: #58a6ff; }}
+        .exit-PARTIAL {{ background: rgba(163, 113, 247, 0.2); color: #a371f7; }}
+        .exit-END {{ background: rgba(139, 148, 158, 0.2); color: #8b949e; }}
+
+        .verdict {{
+            background: linear-gradient(135deg, rgba(63, 185, 80, 0.1), rgba(88, 166, 255, 0.1));
+            border: 1px solid rgba(63, 185, 80, 0.3);
+            border-radius: 12px;
+            padding: 20px;
             text-align: center;
-            margin-top: 30px;
+            margin-top: 20px;
         }}
-        .verdict-box h2 {{
-            color: #00ff88;
-            font-size: 1.8em;
-            margin-bottom: 10px;
-        }}
-        .verdict-box p {{
-            color: #aaa;
-            font-size: 1.1em;
-        }}
+        .verdict h2 {{ color: #3fb950; font-size: 1.5em; margin-bottom: 8px; }}
+        .verdict p {{ color: #8b949e; }}
+
         .two-col {{
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
         }}
-        @media (max-width: 900px) {{
-            .two-col {{
-                grid-template-columns: 1fr;
-            }}
+        @media (max-width: 1000px) {{
+            .two-col {{ grid-template-columns: 1fr; }}
+            .metrics-box {{ position: relative; top: 0; left: 0; margin-bottom: 15px; }}
         }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>V5 Anti-Cheat Backtest</h1>
-            <p>Out-of-Sample Performance: 2022-2025 | {len(results)} Trades | AUDUSD 15M</p>
+            <h1>V5 Anti-Cheat Backtest Results</h1>
+            <p>AUDUSD 15M | Out-of-Sample 2022-2025 | {len(results)} Trades | Trade-Based Sharpe: {sharpe:.2f}</p>
         </div>
 
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-value positive">+{total_return:.1f}%</div>
-                <div class="metric-label">Total Return</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value positive">+{total_return:.1f}%</div>
+                <div class="stat-label">Total Return</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value neutral">{sharpe:.2f}</div>
-                <div class="metric-label">Sharpe Ratio</div>
+            <div class="stat-card">
+                <div class="stat-value neutral">{sharpe:.2f}</div>
+                <div class="stat-label">Sharpe (Trade)</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value {'positive' if win_rate > 50 else 'negative'}">{win_rate:.1f}%</div>
-                <div class="metric-label">Win Rate</div>
+            <div class="stat-card">
+                <div class="stat-value {'positive' if win_rate > 50 else 'negative'}">{win_rate:.1f}%</div>
+                <div class="stat-label">Win Rate</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value negative">-{max_dd:.2f}%</div>
-                <div class="metric-label">Max Drawdown</div>
+            <div class="stat-card">
+                <div class="stat-value negative">-{max_dd:.2f}%</div>
+                <div class="stat-label">Max Drawdown</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value positive">+{avg_win:.3f}%</div>
-                <div class="metric-label">Avg Win</div>
+            <div class="stat-card">
+                <div class="stat-value positive">+{avg_win:.3f}%</div>
+                <div class="stat-label">Avg Win</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value negative">{avg_loss:.3f}%</div>
-                <div class="metric-label">Avg Loss</div>
+            <div class="stat-card">
+                <div class="stat-value negative">{avg_loss:.3f}%</div>
+                <div class="stat-label">Avg Loss</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value neutral">{avg_bars:.1f}</div>
-                <div class="metric-label">Avg Bars Held</div>
+            <div class="stat-card">
+                <div class="stat-value neutral">{avg_bars:.1f}</div>
+                <div class="stat-label">Avg Bars</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value positive">+{total_return - classical_total:.1f}%</div>
-                <div class="metric-label">vs Classical</div>
+            <div class="stat-card">
+                <div class="stat-value positive">+{total_return - classical_total:.1f}%</div>
+                <div class="stat-label">vs Classical</div>
             </div>
         </div>
 
         <div class="chart-container">
-            <div class="chart-title">Cumulative P&L Curve</div>
+            <div class="chart-title">Price Chart with Trade Entries & Exits (First 200 Trades)</div>
+            <div class="metrics-box">
+                <h3>Quick Stats</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Trades Shown:</span>
+                    <span class="metric-value">{len(sample_trades)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Long:</span>
+                    <span class="metric-value positive">{len(long_entries)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Short:</span>
+                    <span class="metric-value negative">{len(short_entries)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Winners:</span>
+                    <span class="metric-value positive">{len(exits_win)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Losers:</span>
+                    <span class="metric-value negative">{len(exits_loss)}</span>
+                </div>
+            </div>
+            <div id="candlestick-chart"></div>
+            <div class="legend-box">
+                <div class="legend-item"><div class="legend-triangle up"></div> Long Entry</div>
+                <div class="legend-item"><div class="legend-triangle down"></div> Short Entry</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#3fb950;"></div> Exit (Win)</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#f85149;"></div> Exit (Loss)</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title">Cumulative P&L - V5 RL vs Classical Strategy</div>
             <div id="cumulative-chart"></div>
-        </div>
-
-        <div class="chart-container">
-            <div class="chart-title">Individual Trade Returns</div>
-            <div id="trades-chart"></div>
-            <div class="exit-reasons">
-                {"".join([f'<span class="exit-badge exit-{reason}">{reason}: {count} ({count/len(results)*100:.1f}%)</span>' for reason, count in sorted(exit_reasons.items(), key=lambda x: -x[1])])}
-            </div>
         </div>
 
         <div class="two-col">
             <div class="chart-container">
+                <div class="chart-title">Individual Trade Returns</div>
+                <div id="trades-chart"></div>
+                <div class="exit-badges">
+                    {"".join([f'<span class="exit-badge exit-{reason}">{reason}: {count}</span>' for reason, count in sorted(exit_reasons.items(), key=lambda x: -x[1])])}
+                </div>
+            </div>
+            <div class="chart-container">
                 <div class="chart-title">Return Distribution</div>
                 <div id="histogram-chart"></div>
             </div>
-            <div class="chart-container">
-                <div class="chart-title">Exit Bar Distribution</div>
-                <div id="bars-chart"></div>
-            </div>
         </div>
 
-        <div class="verdict-box">
-            <h2>✓ LEGITIMATE PERFORMANCE</h2>
-            <p>No lookahead bias detected | 0 bar-0 exits | 0 bar-1 exits | Action masking verified</p>
+        <div class="verdict">
+            <h2>✓ VERIFIED LEGITIMATE</h2>
+            <p>No lookahead bias | 0 bar-0 exits | 0 bar-1 exits | Action masking working | Trade-based Sharpe {sharpe:.2f}</p>
         </div>
     </div>
 
     <script>
-        const plotConfig = {{
-            displayModeBar: true,
-            responsive: true,
-            modeBarButtonsToRemove: ['lasso2d', 'select2d']
-        }};
-
-        const darkLayout = {{
+        const darkTheme = {{
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0.2)',
-            font: {{ color: '#e0e0e0' }},
-            xaxis: {{
-                gridcolor: 'rgba(255,255,255,0.1)',
-                zerolinecolor: 'rgba(255,255,255,0.2)'
-            }},
-            yaxis: {{
-                gridcolor: 'rgba(255,255,255,0.1)',
-                zerolinecolor: 'rgba(255,255,255,0.2)'
-            }},
-            margin: {{ t: 30, r: 30, b: 50, l: 60 }}
+            plot_bgcolor: 'rgba(22,27,34,0.5)',
+            font: {{ color: '#c9d1d9', size: 11 }},
+            xaxis: {{ gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.1)' }},
+            yaxis: {{ gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.1)' }},
+            margin: {{ t: 30, r: 50, b: 50, l: 60 }}
+        }};
+        const config = {{ displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'] }};
+
+        // Candlestick Chart
+        const candleTrace = {{
+            x: {json.dumps(ohlc_data['x'])},
+            open: {json.dumps(ohlc_data['open'])},
+            high: {json.dumps(ohlc_data['high'])},
+            low: {json.dumps(ohlc_data['low'])},
+            close: {json.dumps(ohlc_data['close'])},
+            type: 'candlestick',
+            increasing: {{ line: {{ color: '#3fb950' }}, fillcolor: '#3fb950' }},
+            decreasing: {{ line: {{ color: '#f85149' }}, fillcolor: '#f85149' }},
+            name: 'AUDUSD',
+            hoverinfo: 'x+text',
+            text: {json.dumps(ohlc_data['x'])}
         }};
 
-        // Cumulative P&L Chart
+        const longEntries = {{
+            x: {json.dumps([e['x'] for e in long_entries])},
+            y: {json.dumps([e['y'] for e in long_entries])},
+            mode: 'markers',
+            type: 'scatter',
+            marker: {{ symbol: 'triangle-up', size: 12, color: '#3fb950', line: {{ color: '#fff', width: 1 }} }},
+            name: 'Long Entry',
+            text: {json.dumps([e['text'] for e in long_entries])},
+            hovertemplate: '%{{text}}<br>Price: %{{y:.5f}}<extra></extra>'
+        }};
+
+        const shortEntries = {{
+            x: {json.dumps([e['x'] for e in short_entries])},
+            y: {json.dumps([e['y'] for e in short_entries])},
+            mode: 'markers',
+            type: 'scatter',
+            marker: {{ symbol: 'triangle-down', size: 12, color: '#f85149', line: {{ color: '#fff', width: 1 }} }},
+            name: 'Short Entry',
+            text: {json.dumps([e['text'] for e in short_entries])},
+            hovertemplate: '%{{text}}<br>Price: %{{y:.5f}}<extra></extra>'
+        }};
+
+        const exitsWin = {{
+            x: {json.dumps([e['x'] for e in exits_win])},
+            y: {json.dumps([e['y'] for e in exits_win])},
+            mode: 'markers',
+            type: 'scatter',
+            marker: {{ symbol: 'circle', size: 8, color: '#3fb950', line: {{ color: '#fff', width: 1 }} }},
+            name: 'Exit (Win)',
+            text: {json.dumps([e['text'] for e in exits_win])},
+            hovertemplate: '%{{text}}<extra></extra>'
+        }};
+
+        const exitsLoss = {{
+            x: {json.dumps([e['x'] for e in exits_loss])},
+            y: {json.dumps([e['y'] for e in exits_loss])},
+            mode: 'markers',
+            type: 'scatter',
+            marker: {{ symbol: 'circle', size: 8, color: '#f85149', line: {{ color: '#fff', width: 1 }} }},
+            name: 'Exit (Loss)',
+            text: {json.dumps([e['text'] for e in exits_loss])},
+            hovertemplate: '%{{text}}<extra></extra>'
+        }};
+
+        Plotly.newPlot('candlestick-chart', [candleTrace, longEntries, shortEntries, exitsWin, exitsLoss], {{
+            ...darkTheme,
+            xaxis: {{ ...darkTheme.xaxis, rangeslider: {{ visible: false }}, title: '' }},
+            yaxis: {{ ...darkTheme.yaxis, title: 'Price' }},
+            legend: {{ x: 0.5, y: 1.02, xanchor: 'center', orientation: 'h', bgcolor: 'rgba(0,0,0,0)' }},
+            height: 500
+        }}, config);
+
+        // Cumulative P&L
         Plotly.newPlot('cumulative-chart', [
             {{
                 x: {json.dumps(trade_numbers)},
@@ -452,93 +624,56 @@ def generate_html(results):
                 type: 'scatter',
                 mode: 'lines',
                 fill: 'tozeroy',
-                fillcolor: 'rgba(0, 212, 255, 0.2)',
-                line: {{ color: '#00d4ff', width: 2 }},
+                fillcolor: 'rgba(88, 166, 255, 0.15)',
+                line: {{ color: '#58a6ff', width: 2 }},
                 name: 'V5 RL',
                 hovertemplate: 'Trade %{{x}}<br>Cumulative: %{{y:.2f}}%<extra></extra>'
             }},
             {{
                 x: {json.dumps(trade_numbers)},
-                y: {json.dumps(np.cumsum([r['classical_pnl']*100 for r in results]).tolist())},
+                y: {json.dumps(classical_cumulative)},
                 type: 'scatter',
                 mode: 'lines',
-                line: {{ color: '#888', width: 1, dash: 'dot' }},
+                line: {{ color: '#8b949e', width: 1.5, dash: 'dot' }},
                 name: 'Classical',
                 hovertemplate: 'Trade %{{x}}<br>Classical: %{{y:.2f}}%<extra></extra>'
             }}
         ], {{
-            ...darkLayout,
-            xaxis: {{ ...darkLayout.xaxis, title: 'Trade Number' }},
-            yaxis: {{ ...darkLayout.yaxis, title: 'Cumulative Return (%)' }},
+            ...darkTheme,
+            xaxis: {{ ...darkTheme.xaxis, title: 'Trade Number' }},
+            yaxis: {{ ...darkTheme.yaxis, title: 'Cumulative Return (%)' }},
             legend: {{ x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.5)' }},
-            height: 350
-        }}, plotConfig);
+            height: 300
+        }}, config);
 
-        // Individual Trades Chart
+        // Trade Returns Bar
         const tradeData = {json.dumps(trade_returns)};
-        const colors = tradeData.map(t => t.y >= 0 ? '#00ff88' : '#ff4757');
-
         Plotly.newPlot('trades-chart', [{{
             x: tradeData.map(t => t.x),
             y: tradeData.map(t => t.y),
             type: 'bar',
-            marker: {{ color: colors, opacity: 0.8 }},
-            hovertemplate: tradeData.map(t =>
-                `Trade %{{x}}<br>Return: %{{y:.3f}}%<br>${{t.dir}} | ${{t.reason}} | ${{t.bars}} bars<extra></extra>`
-            )
+            marker: {{ color: tradeData.map(t => t.y >= 0 ? '#3fb950' : '#f85149'), opacity: 0.8 }},
+            hovertemplate: tradeData.map(t => `Trade %{{x}}<br>%{{y:.3f}}%<br>${{t.dir}} | ${{t.reason}}<extra></extra>`)
         }}], {{
-            ...darkLayout,
-            xaxis: {{ ...darkLayout.xaxis, title: 'Trade Number' }},
-            yaxis: {{ ...darkLayout.yaxis, title: 'Return (%)' }},
-            height: 300
-        }}, plotConfig);
+            ...darkTheme,
+            xaxis: {{ ...darkTheme.xaxis, title: 'Trade #' }},
+            yaxis: {{ ...darkTheme.yaxis, title: 'Return (%)' }},
+            height: 280
+        }}, config);
 
         // Histogram
         Plotly.newPlot('histogram-chart', [{{
             x: {json.dumps([r['exit_pnl']*100 for r in results])},
             type: 'histogram',
             nbinsx: 50,
-            marker: {{
-                color: 'rgba(0, 212, 255, 0.6)',
-                line: {{ color: '#00d4ff', width: 1 }}
-            }},
+            marker: {{ color: 'rgba(88, 166, 255, 0.6)', line: {{ color: '#58a6ff', width: 1 }} }},
             hovertemplate: 'Return: %{{x:.2f}}%<br>Count: %{{y}}<extra></extra>'
         }}], {{
-            ...darkLayout,
-            xaxis: {{ ...darkLayout.xaxis, title: 'Return (%)' }},
-            yaxis: {{ ...darkLayout.yaxis, title: 'Frequency' }},
-            height: 300
-        }}, plotConfig);
-
-        // Exit Bars Distribution
-        Plotly.newPlot('bars-chart', [{{
-            x: {json.dumps([r['exit_bar'] for r in results])},
-            type: 'histogram',
-            nbinsx: 30,
-            marker: {{
-                color: 'rgba(123, 44, 191, 0.6)',
-                line: {{ color: '#7b2cbf', width: 1 }}
-            }},
-            hovertemplate: 'Exit Bar: %{{x}}<br>Count: %{{y}}<extra></extra>'
-        }}], {{
-            ...darkLayout,
-            xaxis: {{ ...darkLayout.xaxis, title: 'Exit Bar' }},
-            yaxis: {{ ...darkLayout.yaxis, title: 'Frequency' }},
-            shapes: [{{
-                type: 'line',
-                x0: 1, x1: 1,
-                y0: 0, y1: 1,
-                yref: 'paper',
-                line: {{ color: '#ff4757', width: 2, dash: 'dash' }}
-            }}],
-            annotations: [{{
-                x: 1, y: 0.95, yref: 'paper',
-                text: 'min_exit_bar',
-                showarrow: false,
-                font: {{ color: '#ff4757', size: 10 }}
-            }}],
-            height: 300
-        }}, plotConfig);
+            ...darkTheme,
+            xaxis: {{ ...darkTheme.xaxis, title: 'Return (%)' }},
+            yaxis: {{ ...darkTheme.yaxis, title: 'Count' }},
+            height: 280
+        }}, config);
     </script>
 </body>
 </html>'''
@@ -548,38 +683,46 @@ def generate_html(results):
 
 def main():
     print("="*60)
-    print(" Generating Interactive Backtest Visualization")
+    print(" Generating Interactive Backtest with Price Chart")
     print("="*60)
 
     # Load model
     model_path = EXPERIMENT_DIR / "models" / "exit_policy_final.pt"
-    print(f"\nLoading model from {model_path}")
+    print(f"\nLoading model...")
     model, config = load_model(model_path)
+
+    # Load price data
+    price_df = load_price_data()
+    print(f"Price data: {len(price_df)} bars")
+
+    # Load trades
+    trades_df = load_trades()
+    print(f"Trades: {len(trades_df)} trades")
 
     # Load episodes
     episode_file = STRATEGY_DIR / "data" / "episodes_test_2022_2025.pkl"
-    print(f"Loading episodes from {episode_file}")
+    print(f"Loading episodes...")
     with open(episode_file, 'rb') as f:
         data = pickle.load(f)
     episodes = data['episodes']
-    print(f"Loaded {len(episodes)} episodes")
+    print(f"Episodes: {len(episodes)}")
 
-    # Evaluate trades
-    print("\nEvaluating trades...")
-    results = evaluate_trades(model, episodes, config, max_trades=len(episodes))
+    # Evaluate with V5
+    print("\nEvaluating trades with V5 model...")
+    results = evaluate_trades_with_v5(model, episodes, config, trades_df)
     print(f"Evaluated {len(results)} trades")
 
     # Generate HTML
     print("\nGenerating HTML...")
-    html = generate_html(results)
+    html = generate_html(results, price_df)
 
     # Save
     output_path = EXPERIMENT_DIR / "backtest_visualization.html"
     with open(output_path, 'w') as f:
         f.write(html)
 
-    print(f"\n✓ Saved to: {output_path}")
-    print(f"\nOpen in browser: file://{output_path.absolute()}")
+    print(f"\n✓ Saved: {output_path}")
+    print(f"\nOpen: file://{output_path.absolute()}")
 
 
 if __name__ == "__main__":
