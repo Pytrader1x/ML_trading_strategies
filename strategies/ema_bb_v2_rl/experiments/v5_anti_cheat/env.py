@@ -1,14 +1,15 @@
 """
-Vectorized GPU Environment for v4_no_lookahead experiment.
+Vectorized GPU Environment for v5_anti_cheat experiment.
 
-KEY CHANGES from v3:
-1. ANTI-LOOKAHEAD: min_exit_bar=3 blocks EXIT/PARTIAL until bar 3
-2. ACTION MASKING: get_action_mask() returns valid actions per env
-3. BLOCKED EXIT TRACKING: Monitor early exit attempts
-4. GPU OPTIMIZATION: Supports 256 parallel environments
+KEY CHANGES from v4:
+1. EXIT/PARTIAL FROM BAR 1: min_exit_bar=1 allows exits from t+1
+2. TRAIL_BE FROM BAR 1: min_trail_bar=1 blocks TRAIL_BE until bar 1 (t+1)
+3. TRUE BREAKEVEN: 0 buffer - exit exactly at entry price
+4. MIN PROFIT FOR TRAIL: Must have 2 pips profit before activating TRAIL_BE
+5. ENHANCED MASKING: get_action_mask() masks all profit-taking at bar 0
 
-Design Goal: Fix look-ahead bias where v3 learned to exit at bar 0/1 to
-capture "free" profits visible in the market_tensor.
+Design Goal: Prevent ALL forms of look-ahead exploitation including immediate
+breakeven activation which was exploited in v4 (99.2% fake win rate with +0.25 pips buffer).
 """
 
 import torch
@@ -112,15 +113,16 @@ class EpisodeDataset:
 
 class VectorizedExitEnv:
     """
-    Vectorized environment for v4_no_lookahead.
+    Vectorized environment for v5_anti_cheat.
 
-    KEY DIFFERENCES from v3:
-    - ANTI-LOOKAHEAD: min_exit_bar=3 blocks EXIT/PARTIAL until bar 3
-    - ACTION MASKING: get_action_mask() returns valid actions per env
-    - BLOCKED EXIT TRACKING: Monitor early exit attempts
+    KEY DIFFERENCES from v4:
+    - EXIT/PARTIAL FROM BAR 1: min_exit_bar=1 allows exits from t+1
+    - TRAIL_BE FROM BAR 1: min_trail_bar=1 blocks TRAIL_BE until bar 1 (t+1)
+    - TRUE BREAKEVEN: 0 buffer - exit exactly at entry price
+    - MIN PROFIT FOR TRAIL: Must have 2 pips profit before activating TRAIL_BE
+    - ENHANCED MASKING: get_action_mask() masks all profit-taking at bar 0
 
-    The action masking prevents the model from learning to exploit
-    entry bar information (look-ahead bias).
+    The enhanced masking prevents ALL forms of look-ahead exploitation.
     """
 
     def __init__(
@@ -137,7 +139,12 @@ class VectorizedExitEnv:
 
         # v4: Anti-lookahead parameters
         self.min_exit_bar = config.reward.min_exit_bar
+        self.min_trail_bar = config.reward.min_trail_bar  # NEW in v5
         self.use_action_masking = config.reward.use_action_masking
+
+        # v5: True breakeven parameters
+        self.breakeven_buffer_pct = config.reward.breakeven_buffer_pct  # 0 in v5
+        self.min_profit_for_trail = config.reward.min_profit_for_trail  # 0.001 in v5
 
         # State tracking
         self.episode_indices = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
@@ -147,11 +154,9 @@ class VectorizedExitEnv:
         # Dynamic SL tracking
         self.current_sl_atr = torch.full((self.n_envs,), 1.1, device=self.device)
 
-        # True breakeven tracking (v4 fix)
-        # When TRAIL_BE is triggered, we track it separately and use true breakeven
-        # with a small buffer (+0.25 pips in our favor)
+        # True breakeven tracking
+        # When TRAIL_BE is triggered, we track it and use true breakeven (0 buffer)
         self.breakeven_active = torch.zeros(self.n_envs, dtype=torch.bool, device=self.device)
-        self.breakeven_buffer_pct = 0.25 * 0.0001 / 0.72  # +0.25 pips as pct (~0.000035)
 
         # Action history
         self.action_history = torch.zeros(self.n_envs, 5, device=self.device)
@@ -183,11 +188,16 @@ class VectorizedExitEnv:
         self.blocked_exit_attempts = 0
         self.total_exit_attempts = 0
 
+        # v5: TRAIL_BE specific tracking
+        self.blocked_trail_attempts = 0
+        self.total_trail_attempts = 0
+        self.insufficient_profit_trail = 0  # TRAIL_BE blocked due to low profit
+
     def get_action_mask(self) -> torch.Tensor:
         """
         Get action mask for all environments.
 
-        v4 ANTI-LOOKAHEAD: Block EXIT and PARTIAL_EXIT until min_exit_bar reached.
+        v5 ANTI-CHEAT: Enhanced masking for all exploitable actions.
 
         Returns:
             mask: (n_envs, 5) boolean tensor
@@ -195,23 +205,27 @@ class VectorizedExitEnv:
 
         Masking rules:
         - HOLD (0): Always allowed
-        - EXIT (1): Blocked when current_bar < min_exit_bar
-        - TIGHTEN_SL (2): Always allowed (doesn't close position)
-        - TRAIL_BE (3): Always allowed (doesn't close position)
-        - PARTIAL (4): Blocked when current_bar < min_exit_bar
+        - EXIT (1): Blocked when current_bar < min_exit_bar (bar 1)
+        - TIGHTEN_SL (2): Always allowed (doesn't close position, not exploitable)
+        - TRAIL_BE (3): Blocked when current_bar < min_trail_bar (bar 1)
+        - PARTIAL (4): Blocked when current_bar < min_exit_bar (bar 1)
         """
         mask = torch.ones(self.n_envs, 5, dtype=torch.bool, device=self.device)
 
         # Check which envs are in early bars
-        early_bars = self.current_bar < self.min_exit_bar
+        early_exit_bars = self.current_bar < self.min_exit_bar  # < 3
+        early_trail_bars = self.current_bar < self.min_trail_bar  # < 1 (bar 0 only)
 
-        # Mask EXIT (action 1) in early bars
-        mask[:, Actions.EXIT] = ~early_bars
+        # Mask EXIT (action 1) in early bars (< bar 3)
+        mask[:, Actions.EXIT] = ~early_exit_bars
 
-        # Mask PARTIAL_EXIT (action 4) in early bars
-        mask[:, Actions.PARTIAL_EXIT] = ~early_bars
+        # Mask PARTIAL_EXIT (action 4) in early bars (< bar 3)
+        mask[:, Actions.PARTIAL_EXIT] = ~early_exit_bars
 
-        # HOLD (0), TIGHTEN_SL (2), TRAIL_BE (3) always allowed
+        # v5: Mask TRAIL_BE (action 3) in early bars (< bar 1)
+        mask[:, Actions.TRAIL_BREAKEVEN] = ~early_trail_bars
+
+        # HOLD (0) and TIGHTEN_SL (2) always allowed
         return mask
 
     def reset(self, episode_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -279,7 +293,7 @@ class VectorizedExitEnv:
         """
         Compute counterfactual rewards for exits.
 
-        Same as v3 - balanced counterfactual with asymmetric coefficients.
+        Same as v3/v4 - balanced counterfactual with asymmetric coefficients.
         """
         cfg = self.reward_config
         lookforward = cfg.counterfactual_window
@@ -335,23 +349,33 @@ class VectorizedExitEnv:
         self,
         actions: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
-        """Execute actions with anti-lookahead protection."""
+        """Execute actions with enhanced anti-cheat protection."""
 
         # =================================================================
-        # v4 ANTI-LOOKAHEAD: Track and optionally block early exit attempts
+        # v5 ANTI-CHEAT: Track and block ALL early exploitable actions
         # =================================================================
+
+        # Track EXIT/PARTIAL attempts (same as v4)
         exit_actions = (actions == Actions.EXIT) | (actions == Actions.PARTIAL_EXIT)
-        early_bars = self.current_bar < self.min_exit_bar
-        early_exit_attempt = exit_actions & early_bars & self.position_open
+        early_exit_bars = self.current_bar < self.min_exit_bar
+        early_exit_attempt = exit_actions & early_exit_bars & self.position_open
 
-        # Track statistics
         self.total_exit_attempts += exit_actions.sum().item()
         self.blocked_exit_attempts += early_exit_attempt.sum().item()
+
+        # v5: Track TRAIL_BE attempts
+        trail_actions = (actions == Actions.TRAIL_BREAKEVEN)
+        early_trail_bars = self.current_bar < self.min_trail_bar
+        early_trail_attempt = trail_actions & early_trail_bars & self.position_open
+
+        self.total_trail_attempts += trail_actions.sum().item()
+        self.blocked_trail_attempts += early_trail_attempt.sum().item()
 
         # If action masking is disabled at sample time, convert invalid to HOLD
         if not self.use_action_masking:
             actions = actions.clone()
             actions[early_exit_attempt] = Actions.HOLD
+            actions[early_trail_attempt] = Actions.HOLD
 
         # Track action distribution
         for a in actions[self.position_open]:
@@ -382,7 +406,6 @@ class VectorizedExitEnv:
         # EXIT action (1) - Only processes valid exits (bar >= min_exit_bar)
         # ================================================================
         exit_mask = (actions == Actions.EXIT) & self.position_open
-        # v4: Early exits already converted to HOLD above if masking disabled
 
         if exit_mask.any():
             rewards[exit_mask] = unrealized_pnl[exit_mask] * cfg.reward_scale
@@ -404,14 +427,21 @@ class VectorizedExitEnv:
             rewards[tighten_mask] -= cfg.tighten_sl_cost
 
         # ================================================================
-        # TRAIL_BREAKEVEN action (3) - Allowed at any bar
-        # Now uses TRUE breakeven (+0.25 pips buffer) instead of 0.1 ATR
+        # TRAIL_BREAKEVEN action (3) - Only after min_trail_bar AND min_profit
+        # v5: Uses TRUE breakeven (0 buffer) and requires minimum profit
         # ================================================================
         trail_mask = (actions == Actions.TRAIL_BREAKEVEN) & self.position_open
-        in_profit = unrealized_pnl > 0
-        trail_and_profit = trail_mask & in_profit
+
+        # v5: Must have minimum profit to activate TRAIL_BE
+        has_sufficient_profit = unrealized_pnl > self.min_profit_for_trail
+        trail_and_profit = trail_mask & has_sufficient_profit
+
+        # Track insufficient profit attempts
+        insufficient_profit = trail_mask & ~has_sufficient_profit
+        self.insufficient_profit_trail += insufficient_profit.sum().item()
+
         if trail_and_profit.any():
-            # Activate true breakeven mode (exits if PnL drops below +0.25 pips)
+            # Activate true breakeven mode (exits if PnL drops below buffer)
             self.breakeven_active[trail_and_profit] = True
             rewards[trail_and_profit] -= cfg.trail_sl_cost
 
@@ -446,14 +476,13 @@ class VectorizedExitEnv:
         # Standard ATR-based SL threshold
         sl_pnl_threshold = -self.current_sl_atr * entry_atrs / entry_prices
 
-        # For breakeven mode: use true breakeven (+0.25 pips buffer)
-        # Exit if PnL drops below the buffer (small positive number)
-        breakeven_threshold = self.breakeven_buffer_pct  # ~+0.25 pips
+        # v5: True breakeven (0 buffer) - exit exactly at entry price
+        breakeven_threshold = self.breakeven_buffer_pct  # 0 in v5
 
         # Check standard SL hit (for non-breakeven positions)
         standard_sl_hit = (next_pnl < sl_pnl_threshold) & self.position_open & ~dones & ~self.breakeven_active
 
-        # Check breakeven SL hit (exits at ~breakeven, +0.25 pips buffer)
+        # Check breakeven SL hit (exits at true breakeven, 0 buffer)
         breakeven_sl_hit = (next_pnl < breakeven_threshold) & self.position_open & ~dones & self.breakeven_active
 
         # Combine both
@@ -461,10 +490,10 @@ class VectorizedExitEnv:
 
         if sl_hit.any():
             # For standard SL: use the threshold as exit price
-            # For breakeven SL: exit at the buffer (essentially breakeven)
+            # For breakeven SL: exit at 0 (true breakeven)
             exit_pnl = torch.where(
                 self.breakeven_active,
-                torch.full_like(sl_pnl_threshold, breakeven_threshold),  # True breakeven exit
+                torch.full_like(sl_pnl_threshold, breakeven_threshold),  # True breakeven (0)
                 sl_pnl_threshold  # Standard SL exit
             )
             rewards[sl_hit] = exit_pnl[sl_hit] * cfg.reward_scale
@@ -588,23 +617,33 @@ class VectorizedExitEnv:
 
     def get_lookahead_stats(self) -> Dict[str, float]:
         """
-        Get statistics on blocked early exits.
+        Get statistics on blocked early actions.
 
-        v4: Monitor how often the model attempts to exit early.
-        This should decrease over training as the model learns the mask.
+        v5: Monitor EXIT, PARTIAL, and TRAIL_BE blocking.
+        All rates should decrease over training as the model learns the masks.
         """
-        if self.total_exit_attempts == 0:
-            return {
-                'blocked_rate': 0.0,
-                'blocked_exits': 0,
-                'total_exit_attempts': 0,
-            }
+        stats = {}
 
-        return {
-            'blocked_rate': self.blocked_exit_attempts / self.total_exit_attempts,
-            'blocked_exits': self.blocked_exit_attempts,
-            'total_exit_attempts': self.total_exit_attempts,
-        }
+        # EXIT/PARTIAL stats
+        if self.total_exit_attempts > 0:
+            stats['blocked_exit_rate'] = self.blocked_exit_attempts / self.total_exit_attempts
+        else:
+            stats['blocked_exit_rate'] = 0.0
+        stats['blocked_exits'] = self.blocked_exit_attempts
+        stats['total_exit_attempts'] = self.total_exit_attempts
+
+        # v5: TRAIL_BE stats
+        if self.total_trail_attempts > 0:
+            stats['blocked_trail_rate'] = self.blocked_trail_attempts / self.total_trail_attempts
+            stats['insufficient_profit_rate'] = self.insufficient_profit_trail / self.total_trail_attempts
+        else:
+            stats['blocked_trail_rate'] = 0.0
+            stats['insufficient_profit_rate'] = 0.0
+        stats['blocked_trails'] = self.blocked_trail_attempts
+        stats['total_trail_attempts'] = self.total_trail_attempts
+        stats['insufficient_profit_trails'] = self.insufficient_profit_trail
+
+        return stats
 
     def reset_stats(self):
         """Reset all statistics counters."""
@@ -616,3 +655,6 @@ class VectorizedExitEnv:
         self.total_opportunity_cost = 0.0
         self.blocked_exit_attempts = 0
         self.total_exit_attempts = 0
+        self.blocked_trail_attempts = 0
+        self.total_trail_attempts = 0
+        self.insufficient_profit_trail = 0
