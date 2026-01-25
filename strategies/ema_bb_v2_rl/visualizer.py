@@ -1356,6 +1356,7 @@ HTML_TEMPLATE = """
             }
 
             // === UPDATE DETAILED TRADE LOG (Card-Based Layout) ===
+            if (data.trade_history) {
                 const logBody = document.getElementById('trade-log-body');
                 const PIP_VALUE = 200;  // $200 per pip for 2M position
 
@@ -2659,9 +2660,20 @@ def main():
     parser = argparse.ArgumentParser(description="RL Trade Visualizer")
     parser.add_argument('--port', type=int, default=8765, help='Server port')
     parser.add_argument('--speed', type=int, default=10, help='Initial playback speed')
+    parser.add_argument('--model', type=str, default=None,
+                        help='Path to model checkpoint (e.g., experiments/v3_balanced_exits/models/exit_policy_final_gpu.pt)')
     args = parser.parse_args()
 
     globals()['PORT'] = args.port
+
+    # Update MODEL_PATH if --model is provided
+    if args.model:
+        from pathlib import Path
+        model_path = Path(args.model)
+        if not model_path.is_absolute():
+            model_path = STRATEGY_DIR / model_path
+        globals()['MODEL_PATH'] = model_path
+        print(f"Using model: {model_path}")
 
     # Auto-kill any existing server on this port
     kill_existing_server(args.port)

@@ -55,3 +55,15 @@ checkpoints/
 *.onnx
 wandb/
 mlruns/
+
+# RL model checkpoints (large binary files)
+*.pt
+strategies/*/experiments/*/models/
+strategies/*/models/
+
+# Training results/logs
+strategies/*/experiments/*/results/
+strategies/*/results/
+
+# Vast.ai training results
+vast_training_results/

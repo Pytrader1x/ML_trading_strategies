@@ -1,0 +1,64 @@
+# v3_balanced_exits Experiment Configuration
+#
+# GOAL: Prevent policy collapse to 100% HOLD while keeping counterfactual learning.
+#
+# KEY CHANGES from v2:
+# 1. REDUCED regret_coef (0.3 vs 2.0) - gentle learning, not punishment
+# 2. ASYMMETRIC coefficients - defensive_coef (0.5) > regret_coef (0.3)
+# 3. BOUNDED counterfactual window (8 bars vs 20)
+# 4. RESTORED time penalty (0.005 vs 0.002)
+# 5. NO hold bonus - removed free reward
+# 6. EXIT bonus - small reward for decisive action
+# 7. Diversity loss - force minimum action probability (2%)
+# 8. Higher entropy end (0.01 vs 0.005) - maintain exploration
+
+experiment:
+  name: v3_balanced_exits
+  description: Balanced counterfactual rewards with diversity loss
+  parent: v2_exit_guards
+
+# Data periods
+data:
+  in_sample: 2005-2021
+  out_of_sample: 2022-2025
+  instrument: AUDUSD
+  timeframe: 15M
+
+# Key hyperparameters (changes from v2 highlighted)
+hyperparameters:
+  # Counterfactual - BALANCED
+  regret_coef: 0.3           # Was 2.0 (too harsh)
+  defensive_coef: 0.5        # Was 2.0 (now asymmetric)
+  counterfactual_window: 8   # Was 20 (too far)
+
+  # Time pressure - RESTORED
+  time_coef: 0.005           # Was 0.002 (too low)
+
+  # Exit incentives - NEW
+  exit_cost: 0.0             # Was 0.0001 (penalized exits)
+  exit_bonus: 0.002          # NEW: reward for decisive action
+  hold_bonus: 0.0            # Was 0.005 (free reward)
+
+  # Action diversity - NEW
+  min_action_prob: 0.02      # Force 2% min per action
+  diversity_coef: 0.1        # Weight of diversity loss
+
+  # Entropy - HIGHER END
+  entropy_coef_start: 0.05
+  entropy_coef_end: 0.01     # Was 0.005 (maintain exploration)
+  entropy_anneal_steps: 5_000_000  # Was 7M (faster decay)
+
+# Success metrics
+targets:
+  action_distribution:
+    HOLD: 30-60%
+    EXIT: 20-40%
+    TIGHTEN_SL: 5-15%
+    TRAIL_BE: 5-15%
+    PARTIAL: 5-15%
+  episode_length: 10-50 bars
+  oos_sharpe: "> 1.5"
+
+# Created
+created: 2025-01-25
+status: ready_for_training
