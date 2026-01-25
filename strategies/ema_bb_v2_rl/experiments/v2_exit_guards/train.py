@@ -32,18 +32,18 @@ try:
 except ImportError:
     HAS_WANDB = False
 
-# Import from THIS experiment's frozen config
+# Import from THIS experiment's frozen config and env
 EXPERIMENT_DIR = Path(__file__).parent
 STRATEGY_DIR = EXPERIMENT_DIR.parent.parent
 
-# Add experiment dir to path for local imports
+# Add experiment dir FIRST - for local config and env
 sys.path.insert(0, str(EXPERIMENT_DIR))
 from config import PPOConfig, Actions, RewardConfig
+from env import VectorizedExitEnv, EpisodeDataset, TradeEpisode
 
-# Import shared modules from strategy root
+# Import shared modules from strategy root (model only)
 sys.path.insert(0, str(STRATEGY_DIR))
 from model import ActorCritic, RolloutBuffer
-from env import VectorizedExitEnv, EpisodeDataset, TradeEpisode
 
 
 class PPOTrainer:
@@ -109,14 +109,12 @@ class PPOTrainer:
                     'entropy_coef_end': config.entropy_coef_end,
                     'total_timesteps': config.total_timesteps,
                     'hidden_dims': config.hidden_dims,
-                    # V2 specific
+                    # V2 counterfactual rewards
                     'time_coef': config.reward.time_coef,
                     'regret_coef': config.reward.regret_coef,
-                    'min_profit_for_exit': config.reward.min_profit_for_exit,
-                    'min_bars_for_exit': config.reward.min_bars_for_exit,
-                    'min_profit_for_partial': config.reward.min_profit_for_partial,
-                    'min_bars_for_partial': config.reward.min_bars_for_partial,
-                    'invalid_action_penalty': config.reward.invalid_action_penalty,
+                    'defensive_coef': config.reward.defensive_coef,
+                    'counterfactual_lookforward': config.reward.counterfactual_lookforward,
+                    'exit_cost': config.reward.exit_cost,
                 },
             )
             wandb.watch(policy, log='gradients', log_freq=100)
@@ -135,11 +133,12 @@ class PPOTrainer:
         print(f"  Batch size: {config.batch_size}")
         print(f"  Updates: {num_updates}")
         print(f"  W&B: {'Enabled' if self.use_wandb else 'Disabled'}")
-        print(f"\n  --- V2 Key Changes ---")
-        print(f"  EXIT guards: min_profit={config.reward.min_profit_for_exit}, min_bars={config.reward.min_bars_for_exit}")
-        print(f"  PARTIAL guards: min_profit={config.reward.min_profit_for_partial}, min_bars={config.reward.min_bars_for_partial}")
+        print(f"\n  --- V2 Counterfactual Rewards ---")
+        print(f"  defensive_coef: {config.reward.defensive_coef} (reward for avoiding loss)")
+        print(f"  regret_coef: {config.reward.regret_coef} (penalty for missing gain)")
+        print(f"  lookforward: {config.reward.counterfactual_lookforward} bars")
+        print(f"  exit_cost: {config.reward.exit_cost}")
         print(f"  time_coef: {config.reward.time_coef} (v1 was 0.005)")
-        print(f"  regret_coef: {config.reward.regret_coef} (v1 was 0.5)")
         print(f"  entropy decay: {config.entropy_coef_start} -> {config.entropy_coef_end} over {config.entropy_anneal_steps:,} steps")
         print(f"{'=' * 60}\n")
 
