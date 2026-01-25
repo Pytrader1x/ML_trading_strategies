@@ -160,18 +160,36 @@ def load_model(
             f"Error: {e}"
         )
 
-    # Create the model
-    config = PPOConfig(device=device)
-    base_model = ActorCritic(config)
-
-    # Load weights
+    # Load checkpoint first to infer architecture
     if model_path.exists():
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-        base_model.load_state_dict(checkpoint['model_state_dict'])
+
+        # Infer hidden_dims from checkpoint weights
+        state_dict = checkpoint['model_state_dict']
+        if 'encoder.0.weight' in state_dict:
+            first_hidden = state_dict['encoder.0.weight'].shape[0]
+            # Find second hidden layer
+            if 'encoder.3.weight' in state_dict:
+                second_hidden = state_dict['encoder.3.weight'].shape[0]
+                hidden_dims = [first_hidden, second_hidden]
+            else:
+                hidden_dims = [first_hidden, first_hidden // 2]
+            print(f"  Detected architecture: hidden_dims={hidden_dims}")
+        else:
+            hidden_dims = [256, 128]  # Default fallback
+
+        # Create config with inferred architecture
+        config = PPOConfig(device=device)
+        config.hidden_dims = hidden_dims
+        base_model = ActorCritic(config)
+
+        base_model.load_state_dict(state_dict)
         print(f"Loaded model from {model_path}")
-        print(f"  Trained for {checkpoint.get('timestep', 'unknown')} steps")
+        print(f"  Trained for {checkpoint.get('total_steps', checkpoint.get('timestep', 'unknown'))} steps")
     else:
         print(f"WARNING: Model not found at {model_path}, using random policy")
+        config = PPOConfig(device=device)
+        base_model = ActorCritic(config)
 
     base_model.to(device)
     base_model.eval()
