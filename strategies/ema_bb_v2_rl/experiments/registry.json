@@ -13,6 +13,25 @@
       "max_dd_pct": 2.93,
       "win_rate": 42.7,
       "total_trades": 1325
+    },
+    "v2_exit_guards": {
+      "path": "experiments/v2_exit_guards",
+      "status": "pending",
+      "created": "2026-01-25",
+      "parent": "v1_baseline",
+      "description": "Fix immediate exits by enabling guards on EXIT and PARTIAL actions",
+      "changes": [
+        "Enable EXIT guards: min_profit=0.001, min_bars=2",
+        "Strengthen PARTIAL guards: min_profit=0.002, min_bars=2",
+        "Reduce time_coef: 0.002 (was 0.005)",
+        "Increase regret_coef: 0.8 (was 0.5)",
+        "Slower entropy decay: 0.05->0.005 over 7M steps"
+      ],
+      "sharpe": null,
+      "return_pct": null,
+      "max_dd_pct": null,
+      "win_rate": null,
+      "total_trades": null
     }
   }
 }

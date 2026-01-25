@@ -1,0 +1,127 @@
+# Experiment Configuration - v2_exit_guards
+# =========================================
+# Fix for immediate position cutting via action guards
+
+meta:
+  version: "v2"
+  name: "exit_guards"
+  description: "Fix immediate exits by enabling guards on EXIT and PARTIAL actions"
+  created: "2026-01-25T09:00:00Z"
+  author: "william"
+  parent_version: "v1_baseline"
+  status: "pending"
+
+# ===========================================================================
+# KEY CHANGES FROM V1_BASELINE
+# ===========================================================================
+#
+# PROBLEM: Model learned to EXIT at Bar 0 with ~0 pips to avoid time penalty
+# ROOT CAUSE: EXIT had no guards (min_profit=0, min_bars=0)
+#
+# SOLUTION:
+# 1. Enable EXIT guards: min_profit=0.001, min_bars=2
+# 2. Strengthen PARTIAL guards: min_profit=0.002, min_bars=2
+# 3. Reduce time_coef: 0.002 (was 0.005) - less incentive for early exits
+# 4. Increase regret_coef: 0.8 (was 0.5) - penalize missing optimal exit
+# 5. Slower entropy decay: ends at 0.005 (was 0.001), over 7M steps (was 5M)
+# ===========================================================================
+
+training:
+  # Data files (relative to strategy root)
+  train_episodes: "data/episodes_train_2005_2021.pkl"
+  test_episodes: "data/episodes_test_2022_2025.pkl"
+
+  # PPO Configuration
+  ppo:
+    n_envs: 64
+    max_episode_length: 200
+    state_dim: 25
+    action_dim: 5
+
+    # Core hyperparameters (unchanged from v1)
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_epsilon: 0.2
+    target_kl: 0.015
+
+    # Training schedule (unchanged)
+    learning_rate: 0.0003
+    lr_end: 0.00001
+    lr_schedule: "linear"
+    n_epochs: 10
+    batch_size: 2048
+    n_steps: 2048
+    total_timesteps: 10000000
+
+    # Loss weights (unchanged)
+    value_coef: 0.5
+    max_grad_norm: 0.5
+
+    # Entropy annealing - CHANGED: slower decay for more exploration
+    entropy_coef_start: 0.05
+    entropy_coef_end: 0.005    # was 0.001 - higher final entropy
+    entropy_anneal_steps: 7000000  # was 5000000 - longer anneal
+
+    # Network architecture (unchanged)
+    hidden_dims: [256, 256]
+    use_layer_norm: true
+    dropout: 0.0
+
+  # Reward Configuration - KEY CHANGES
+  reward:
+    w_realized: 1.0
+    w_mtm: 0.1
+    risk_coef: 0.3
+    dd_threshold: 0.1
+    time_coef: 0.002          # REDUCED from 0.005 - less incentive for early exits
+    time_sigmoid_center: 100
+    regret_coef: 0.8          # INCREASED from 0.5 - penalize missing optimal exit
+    tighten_sl_cost: 0.001
+    trail_sl_cost: 0.0005
+    reward_scale: 100.0
+
+    # ACTION GUARDS - THE FIX
+    min_profit_for_exit: 0.001    # NEW: ~10 pips minimum to EXIT (was 0.0)
+    min_bars_for_exit: 2          # NEW: must hold 2 bars to EXIT (was 0)
+    min_profit_for_partial: 0.002 # INCREASED: ~20 pips for PARTIAL (was 0.001)
+    min_bars_for_partial: 2       # INCREASED: 2 bars for PARTIAL (was 1)
+    invalid_action_penalty: 0.02  # INCREASED: penalty for invalid attempts (was 0.01)
+
+  # Infrastructure
+  device: "cuda"
+  wandb_project: "rl-exit-optimizer"
+
+evaluation:
+  instruments: ["AUDUSD"]
+  timeframes: ["15M"]
+  test_range: "2022-01-01 to 2025-01-01"
+  train_range: "2005-01-01 to 2021-12-31"
+
+results_summary:
+  # To be populated after training
+  sharpe_ratio: null
+  return_pct: null
+  max_drawdown_pct: null
+  win_rate: null
+  total_trades: null
+  profit_factor: null
+  cagr: null
+
+changes_from_previous:
+  - "Enable EXIT guards: min_profit=0.001, min_bars=2"
+  - "Strengthen PARTIAL guards: min_profit=0.002, min_bars=2"
+  - "Reduce time_coef: 0.002 (was 0.005)"
+  - "Increase regret_coef: 0.8 (was 0.5)"
+  - "Slower entropy decay: 0.05->0.005 over 7M steps"
+  - "Higher invalid_action_penalty: 0.02 (was 0.01)"
+
+hypothesis: |
+  With EXIT guards enabled, the model will be forced to HOLD longer.
+  Combined with reduced time penalty and higher regret penalty, it should
+  learn to wait for profitable opportunities rather than immediately exiting.
+
+  Expected behavior changes:
+  - Average episode length should increase (model holds longer)
+  - EXIT action % should decrease initially (blocked by guards)
+  - HOLD action % should increase
+  - Eventually, profitable EXIT decisions should emerge
