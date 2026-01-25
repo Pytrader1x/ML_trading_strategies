@@ -539,6 +539,62 @@ V5 successfully learned legitimate risk management:
 - True breakeven (0 buffer) prevents free money exploitation
 - Strategy focuses on capital preservation over profit maximization
 
+## 9. Session - 2026-01-25: V5 Trade Visualizations
+
+### 9.1 Visualization Script Created
+
+Created `visualize_trades.py` to generate comprehensive trade analysis visuals:
+
+```
+experiments/v5_anti_cheat/visualizations/
+├── v5_trade_summary.png           # 4-panel summary
+├── v5_decision_waterfall.png      # PnL contribution by action
+├── trade_example_best_win.png     # +0.46% example
+├── trade_example_typical_win.png  # Median winning trade
+├── trade_example_worst_loss.png   # -0.13% example
+├── trade_example_typical_loss.png # Median losing trade
+├── trade_example_breakeven_1.png  # Breakeven example
+└── trade_example_breakeven_2.png  # Breakeven example
+```
+
+### 9.2 Key Visualizations
+
+**Trade Summary (4 panels):**
+1. **Return Distribution**: Histogram showing mean=0.04%, median=0.00%
+2. **Action Distribution by Bar**: Shows TIGHTEN_SL dominates bars 0-5
+3. **Trade Outcome Distribution**: 40.6% wins, 20.6% losses, 38.8% breakeven
+4. **PnL by Exit Type**: EXIT +25%, TIGHTEN_SL -10%, TRAIL_BE 0%, PARTIAL +6%
+
+**Decision Waterfall:**
+- EXIT actions: n=187, avg=+0.13%, total=+25%
+- TIGHTEN_SL (SL hits): n=217, avg=-0.06%, total=-10%
+- TRAIL_BE breakeven: n=53, avg=0.00%
+- PARTIAL exits: n=43, avg=+0.13%, total=+6%
+- Final cumulative PnL: +18.34%
+
+**Individual Trade Examples:**
+- Best Win: +0.46% - TIGHTEN_SL at bar 0,1 then EXIT at bar 2
+- Typical Loss: -0.13% - TIGHTEN_SL then SL_HIT
+- Breakeven: Shows TIGHTEN_SL, TRAIL_BE progression before EXIT
+
+### 9.3 Visual Insights
+
+Each individual trade plot shows:
+1. **Top panel**: PnL curve with action markers (colored dots)
+2. **Bottom panel**: Action probability heatmap over time
+
+The heatmap reveals the model's decision-making:
+- TIGHTEN_SL has highest probability (darkest) at early bars
+- EXIT probability increases when PnL is positive
+- TRAIL_BE probability increases after profit threshold met
+
+### 9.4 Usage
+
+```bash
+cd experiments/v5_anti_cheat
+python visualize_trades.py --n-trades 500 --device cpu
+```
+
 ## Files
 
 ```
@@ -547,6 +603,11 @@ experiments/v5_anti_cheat/
 ├── env.py                   # Enhanced environment
 ├── train.py                 # Training script
 ├── evaluate_oos_fast.py     # OOS evaluation
+├── visualize_trades.py      # Trade visualization script (NEW)
 ├── models/exit_policy_final.pt  # Trained model
-└── training_gpu.log         # Training log
+├── training_gpu.log         # Training log
+└── visualizations/          # Generated plots (NEW)
+    ├── v5_trade_summary.png
+    ├── v5_decision_waterfall.png
+    └── trade_example_*.png
 ```
