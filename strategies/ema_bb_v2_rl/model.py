@@ -110,6 +110,7 @@ class ActorCritic(nn.Module):
         self,
         state: torch.Tensor,
         deterministic: bool = False,
+        action_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Sample action from policy.
@@ -117,6 +118,8 @@ class ActorCritic(nn.Module):
         Args:
             state: (batch_size, state_dim)
             deterministic: If True, return argmax action
+            action_mask: (batch_size, action_dim) bool tensor, True=allowed, False=masked
+                         If provided, invalid actions have logits set to -inf
 
         Returns:
             action: (batch_size,) action indices
@@ -124,6 +127,10 @@ class ActorCritic(nn.Module):
             value: (batch_size,) value estimates
         """
         action_logits, value = self.forward(state)
+
+        # Apply action mask: set invalid actions to -inf so they have 0 probability
+        if action_mask is not None:
+            action_logits = action_logits.masked_fill(~action_mask, float('-inf'))
 
         dist = Categorical(logits=action_logits)
 
@@ -140,6 +147,7 @@ class ActorCritic(nn.Module):
         self,
         state: torch.Tensor,
         action: torch.Tensor,
+        action_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Evaluate log probability and entropy of actions.
@@ -149,13 +157,19 @@ class ActorCritic(nn.Module):
         Args:
             state: (batch_size, state_dim)
             action: (batch_size,) action indices
+            action_mask: (batch_size, action_dim) bool tensor, True=allowed, False=masked
+                         Must match the mask used during action selection
 
         Returns:
             log_prob: (batch_size,) log probability of actions
-            entropy: (batch_size,) policy entropy
+            entropy: (batch_size,) policy entropy (computed over valid actions only)
             value: (batch_size,) value estimates
         """
         action_logits, value = self.forward(state)
+
+        # Apply action mask for consistent probability calculation
+        if action_mask is not None:
+            action_logits = action_logits.masked_fill(~action_mask, float('-inf'))
 
         dist = Categorical(logits=action_logits)
         log_prob = dist.log_prob(action)
@@ -177,17 +191,26 @@ class ActorCritic(nn.Module):
         value = self.critic(features)
         return value.squeeze(-1)
 
-    def get_action_probs(self, state: torch.Tensor) -> torch.Tensor:
+    def get_action_probs(
+        self,
+        state: torch.Tensor,
+        action_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Get action probabilities for visualization.
 
         Args:
             state: (batch_size, state_dim)
+            action_mask: (batch_size, action_dim) bool tensor, True=allowed, False=masked
 
         Returns:
-            probs: (batch_size, action_dim) probability distribution
+            probs: (batch_size, action_dim) probability distribution (masked actions have 0 prob)
         """
         action_logits, _ = self.forward(state)
+
+        if action_mask is not None:
+            action_logits = action_logits.masked_fill(~action_mask, float('-inf'))
+
         return torch.softmax(action_logits, dim=-1)
 
 
@@ -203,11 +226,13 @@ class RolloutBuffer:
         buffer_size: int,
         n_envs: int,
         state_dim: int,
+        action_dim: int = 5,
         device: str = "cuda",
     ):
         self.buffer_size = buffer_size
         self.n_envs = n_envs
         self.state_dim = state_dim
+        self.action_dim = action_dim
         self.device = torch.device(device)
 
         # Pre-allocate tensors
@@ -217,6 +242,11 @@ class RolloutBuffer:
         self.dones = torch.zeros(buffer_size, n_envs, device=self.device)
         self.log_probs = torch.zeros(buffer_size, n_envs, device=self.device)
         self.values = torch.zeros(buffer_size, n_envs, device=self.device)
+
+        # Action masks for v4 anti-lookahead (bool: True=allowed, False=masked)
+        self.action_masks = torch.ones(
+            buffer_size, n_envs, action_dim, dtype=torch.bool, device=self.device
+        )
 
         self.advantages = torch.zeros(buffer_size, n_envs, device=self.device)
         self.returns = torch.zeros(buffer_size, n_envs, device=self.device)
@@ -232,6 +262,7 @@ class RolloutBuffer:
         done: torch.Tensor,
         log_prob: torch.Tensor,
         value: torch.Tensor,
+        action_mask: Optional[torch.Tensor] = None,
     ):
         """Add a transition to the buffer."""
         self.states[self.ptr] = state
@@ -240,6 +271,10 @@ class RolloutBuffer:
         self.dones[self.ptr] = done.float()
         self.log_probs[self.ptr] = log_prob
         self.values[self.ptr] = value
+
+        # Store action mask for PPO update (v4 anti-lookahead)
+        if action_mask is not None:
+            self.action_masks[self.ptr] = action_mask
 
         self.ptr += 1
         if self.ptr >= self.buffer_size:
@@ -288,6 +323,7 @@ class RolloutBuffer:
         returns = self.returns[:self.ptr].view(-1)
         advantages = self.advantages[:self.ptr].view(-1)
         values = self.values[:self.ptr].view(-1)
+        action_masks = self.action_masks[:self.ptr].view(-1, self.action_dim)
 
         for start in range(0, size, batch_size):
             end = min(start + batch_size, size)
@@ -300,6 +336,7 @@ class RolloutBuffer:
                 'returns': returns[batch_indices],
                 'advantages': advantages[batch_indices],
                 'values': values[batch_indices],
+                'action_masks': action_masks[batch_indices],
             }
 
     def reset(self):

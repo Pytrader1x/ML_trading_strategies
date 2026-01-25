@@ -1,0 +1,114 @@
+# V4 No-Lookahead Experiment Configuration
+# ==========================================
+# FROZEN SNAPSHOT - Do not modify after training begins
+
+name: v4_no_lookahead
+parent: v3_balanced_exits
+created: 2025-01-25
+status: ready_for_training
+
+# Problem Statement
+# -----------------
+# v3 achieved fake 97% win rate and Sharpe 11+ by exploiting look-ahead bias.
+# The model learned to exit at bar 0/1 to capture "free" profits visible in
+# the market_tensor at entry time. In real trading, you can't know the first
+# bar's P&L at the exact moment of entry.
+
+# Key Changes from v3
+# -------------------
+changes:
+  - name: anti_lookahead
+    description: Block EXIT and PARTIAL_EXIT until bar 3
+    parameter: min_exit_bar=3
+
+  - name: action_masking
+    description: Invalid actions masked at distribution level (logits=-inf)
+    parameter: use_action_masking=True
+
+  - name: gpu_optimization
+    description: Optimized for RTX 4090 (24GB VRAM)
+    parameters:
+      n_envs: 256         # Up from 128
+      batch_size: 8192    # Up from 4096
+      hidden_dims: [512, 256]  # Larger network
+
+  - name: longer_training
+    description: More thorough training
+    parameter: total_timesteps=15_000_000  # Up from 10M
+
+# Configuration Summary
+# ---------------------
+config:
+  # Anti-lookahead
+  min_exit_bar: 3
+  use_action_masking: true
+
+  # PPO
+  n_envs: 256
+  n_steps: 2048
+  batch_size: 8192
+  total_timesteps: 15_000_000
+
+  # Network
+  hidden_dims: [512, 256]
+  use_layer_norm: true
+
+  # Kept from v3
+  defensive_coef: 0.5
+  regret_coef: 0.4
+  counterfactual_window: 8
+  min_action_prob: 0.02
+  diversity_coef: 0.1
+
+# Expected Results
+# ----------------
+expected_metrics:
+  sharpe_ratio: 0.8-1.5      # Realistic (v3 fake: 11+)
+  win_rate: 45-55%           # Realistic (v3 fake: 97%)
+  avg_length: 15-30 bars     # Realistic (v3: 1.3 bars)
+  profit_factor: 1.1-1.5     # Realistic (v3 fake: 7.3)
+
+# Verification Checklist
+# ----------------------
+verification:
+  - description: No exits before bar 3
+    check: blocked_rate should approach 0%
+
+  - description: Average episode length realistic
+    check: avg_length > 10 bars
+
+  - description: Action diversity maintained
+    check: All actions > 1%
+
+  - description: Win rate sanity
+    check: win_rate < 80%
+
+  - description: Sharpe sanity
+    check: sharpe < 3.0
+
+# Training Instructions
+# ---------------------
+training:
+  platform: vast.ai
+  gpu: RTX 4090 (24GB VRAM)
+  expected_time: 2-3 hours
+  expected_cost: $1.00-1.50
+
+  commands:
+    search: "./deploy_vastai.sh search"
+    create: "./deploy_vastai.sh create <offer_id>"
+    setup: "./deploy_vastai.sh setup <instance_id>"
+    train: "./deploy_vastai.sh train <instance_id>"
+    status: "./deploy_vastai.sh status <instance_id>"
+    download: "./deploy_vastai.sh download <instance_id>"
+    destroy: "./deploy_vastai.sh destroy <instance_id>"
+
+# Files
+# -----
+files:
+  config: config.py
+  environment: env.py
+  training: train.py
+  evaluation: evaluate_oos_fast.py
+  deployment: deploy_vastai.sh
+  shared_model: ../../model.py
