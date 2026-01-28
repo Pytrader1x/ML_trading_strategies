@@ -21,18 +21,13 @@ import pandas as pd
 from typing import List, Tuple
 from dataclasses import dataclass
 
-# Add paths
-ENGINE_PATH = Path("/Users/williamsmith/Python_local_Mac/04_backtesting/production_backtest_engine/src")
-if str(ENGINE_PATH) not in sys.path:
-    sys.path.insert(0, str(ENGINE_PATH))
-
-DATA_DIR = Path("/Users/williamsmith/Python_local_Mac/01_trading_strategies/ML_trading_strategies/data")
+# Paths - relative to script location for portability
 STRATEGY_DIR = Path(__file__).parent
-CLASSICAL_RESULTS_DIR = STRATEGY_DIR.parent / "ema_bb_scalp_v2" / "results"
+DATA_DIR = STRATEGY_DIR / "data"
 
 # Default data files for 2005-2025 dataset
-DEFAULT_PRICE_FILE = DATA_DIR / "AUDUSD_15M.csv"
-DEFAULT_TRADES_FILE = STRATEGY_DIR / "data" / "trades_train_2005_2021.csv"
+DEFAULT_PRICE_FILE = DATA_DIR / "AUDUSD_15M.parquet"
+DEFAULT_TRADES_FILE = DATA_DIR / "trades_train_2005_2021.csv"
 
 
 @dataclass
@@ -161,43 +156,39 @@ def calculate_bollinger(series: np.ndarray, period: int = 20, dev: float = 2.0) 
     return upper, lower, sma
 
 
-def load_price_data(instrument: str, timeframe: str, start_date: str = "2010-01-01") -> pd.DataFrame:
-    """Load and resample price data."""
-    data_file = DATA_DIR / f"{instrument.upper()}_MASTER.csv"
-    if not data_file.exists():
-        raise FileNotFoundError(f"Data file not found: {data_file}")
+def load_price_data(instrument: str, timeframe: str, start_date: str = "2005-01-01") -> pd.DataFrame:
+    """Load price data from parquet file."""
+    # Try parquet first, then CSV
+    parquet_file = DATA_DIR / f"{instrument.upper()}_{timeframe.upper()}.parquet"
+    csv_file = DATA_DIR / f"{instrument.upper()}_{timeframe.upper()}.csv"
 
-    df = pd.read_csv(data_file)
-
-    # Find datetime column
-    for col in ['DateTime', 'Date', 'Time', 'time', 'datetime', 'date']:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col])
-            df.set_index(col, inplace=True)
-            df.index.name = 'Time'
-            break
+    if parquet_file.exists():
+        df = pd.read_parquet(parquet_file)
+    elif csv_file.exists():
+        df = pd.read_csv(csv_file)
+        # Find datetime column
+        for col in ['DateTime', 'Date', 'Time', 'time', 'datetime', 'date']:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+                df.set_index(col, inplace=True)
+                df.index.name = 'Time'
+                break
+    else:
+        raise FileNotFoundError(f"Data file not found: {parquet_file} or {csv_file}")
 
     df = df.loc[start_date:]
-
-    # Resample
-    tf_map = {'15M': '15min', '1H': '1h', '4H': '4h', '1D': '1d'}
-    tf_pandas = tf_map.get(timeframe.upper(), timeframe.lower())
-    agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
-    if 'Volume' in df.columns:
-        agg_dict['Volume'] = 'sum'
-    df = df.resample(tf_pandas).agg(agg_dict).dropna()
-
     return df
 
 
 def load_trades(instrument: str, timeframe: str) -> pd.DataFrame:
-    """Load trades from classical strategy backtest."""
-    trades_file = CLASSICAL_RESULTS_DIR / instrument.upper() / timeframe.upper() / "trades.csv"
+    """Load trades from data directory."""
+    # Look for trades file in data directory
+    trades_file = DATA_DIR / f"trades_{instrument.lower()}_{timeframe.lower()}.csv"
     if not trades_file.exists():
-        raise FileNotFoundError(
-            f"Trades file not found: {trades_file}\n"
-            f"Run the classical strategy first: python strategies/ema_bb_scalp_v2/run.py -i {instrument} -t {timeframe}"
-        )
+        # Try default training file
+        trades_file = DEFAULT_TRADES_FILE
+    if not trades_file.exists():
+        raise FileNotFoundError(f"Trades file not found: {trades_file}")
 
     df = pd.read_csv(trades_file)
 
@@ -423,13 +414,16 @@ def main():
     print("Loading price data...")
     if args.price_file:
         price_file = Path(args.price_file)
-        df = pd.read_csv(price_file)
-        for col in ['DateTime', 'Date', 'Time', 'time', 'datetime', 'date']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col])
-                df.set_index(col, inplace=True)
-                df.index.name = 'Time'
-                break
+        if price_file.suffix == '.parquet':
+            df = pd.read_parquet(price_file)
+        else:
+            df = pd.read_csv(price_file)
+            for col in ['DateTime', 'Date', 'Time', 'time', 'datetime', 'date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col])
+                    df.set_index(col, inplace=True)
+                    df.index.name = 'Time'
+                    break
         price_df = df.loc[args.start:]
     else:
         price_df = load_price_data(args.instrument, args.timeframe, args.start)
