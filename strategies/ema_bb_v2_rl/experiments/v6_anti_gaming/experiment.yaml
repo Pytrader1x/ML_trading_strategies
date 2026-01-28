@@ -1,0 +1,146 @@
+# V5 Anti-Cheat Experiment Configuration
+# ========================================
+# FROZEN SNAPSHOT - Do not modify after training begins
+
+name: v5_anti_cheat
+parent: v4_no_lookahead
+created: 2025-01-25
+status: ready_for_training
+
+# Problem Statement
+# -----------------
+# v4 testing revealed that even with min_exit_bar=3, the TRAIL_BE action at bar 0
+# could be exploited. With +0.25 pips buffer, model achieved 99.2% fake win rate
+# by immediately activating breakeven to lock in the buffer profit.
+#
+# With true breakeven (0 buffer), win rate was realistic (17-24%) but model was
+# trained with old logic (0.1 ATR SL), causing behavior mismatch.
+
+# Key Changes from v4
+# -------------------
+changes:
+  - name: exit_from_bar_1
+    description: Allow EXIT and PARTIAL_EXIT from bar 1 (t+1)
+    parameter: min_exit_bar=1
+    rationale: More flexibility while still blocking bar 0 exploitation
+
+  - name: trail_be_delayed
+    description: Block TRAIL_BE until bar 1 (t+1)
+    parameter: min_trail_bar=1
+    rationale: Prevents immediate breakeven exploitation at bar 0
+
+  - name: true_breakeven
+    description: Exit exactly at entry price, no buffer
+    parameter: breakeven_buffer_pct=0.0
+    rationale: +0.25 pips buffer was exploited (99.2% fake win rate)
+
+  - name: min_profit_for_trail
+    description: Require 2 pips profit before TRAIL_BE activation
+    parameter: min_profit_for_trail=0.0002
+    rationale: Prevents activating breakeven on tiny profits
+
+  - name: enhanced_masking
+    description: get_action_mask() masks all profit-taking at bar 0
+    parameter: use_action_masking=True
+    rationale: All exploitable actions masked at distribution level
+
+# Configuration Summary
+# ---------------------
+config:
+  # Anti-cheat timing
+  min_exit_bar: 1          # EXIT/PARTIAL blocked until bar 1 (t+1)
+  min_trail_bar: 1         # TRAIL_BE blocked until bar 1 (t+1)
+  use_action_masking: true
+
+  # True breakeven
+  breakeven_buffer_pct: 0.0  # True breakeven, no free money
+  min_profit_for_trail: 0.0002  # 0.02% = ~2 pips minimum
+
+  # PPO (same as v4)
+  n_envs: 256
+  n_steps: 2048
+  batch_size: 8192
+  total_timesteps: 15_000_000
+
+  # Network (same as v4)
+  hidden_dims: [512, 256]
+  use_layer_norm: true
+
+  # Kept from v3/v4
+  defensive_coef: 0.5
+  regret_coef: 0.4
+  counterfactual_window: 8
+  min_action_prob: 0.02
+  diversity_coef: 0.1
+
+# Expected Results
+# ----------------
+expected_metrics:
+  sharpe_ratio: 0.8-1.5      # Realistic
+  win_rate: 35-50%           # Realistic (not exploited)
+  avg_length: 10-30 bars     # Realistic (not immediate exits)
+  profit_factor: 1.1-1.5     # Realistic
+
+# v4 vs v5 Comparison
+# -------------------
+comparison:
+  v4_with_buffer:
+    win_rate: 99.2%
+    note: "EXPLOITED - model locked in +0.25 pips buffer immediately"
+
+  v4_true_breakeven:
+    win_rate: 17.2%
+    note: "Realistic but model trained with old logic (0.1 ATR)"
+
+  v5_expected:
+    win_rate: 35-50%
+    note: "Model trained with proper logic from start"
+
+# Verification Checklist
+# ----------------------
+verification:
+  - description: TRAIL_BE blocked at bar 0
+    check: blocked_trail_rate should start high then decrease to 0%
+
+  - description: No EXIT/PARTIAL before bar 3
+    check: blocked_exit_rate should approach 0%
+
+  - description: No exploitation via TRAIL_BE
+    check: win_rate < 80%
+
+  - description: Realistic episode lengths
+    check: avg_length > 5 bars
+
+  - description: Insufficient profit blocking works
+    check: insufficient_profit_rate tracked in logs
+
+  - description: Action diversity maintained
+    check: All actions > 1%
+
+# Training Instructions
+# ---------------------
+training:
+  platform: vast.ai
+  gpu: RTX 4090 (24GB VRAM)
+  expected_time: 2-3 hours
+  expected_cost: $1.00-1.50
+
+# Files
+# -----
+files:
+  config: config.py
+  environment: env.py
+  training: train.py
+  shared_model: ../../model.py
+
+# Anti-Cheat Summary
+# ------------------
+# All exploitable actions are now controlled:
+#
+# | Action         | Allowed From | Additional Guard    |
+# |----------------|--------------|---------------------|
+# | HOLD           | Bar 0        | None                |
+# | TIGHTEN_SL     | Bar 0        | None (risk mgmt)    |
+# | EXIT           | Bar 1        | None                |
+# | PARTIAL_EXIT   | Bar 1        | None                |
+# | TRAIL_BE       | Bar 1        | min_profit > 2 pips |

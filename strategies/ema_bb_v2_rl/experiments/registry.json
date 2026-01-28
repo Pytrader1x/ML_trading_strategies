@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "active_version": "v1_baseline",
+  "active_version": "v6_anti_gaming",
   "versions": {
     "v1_baseline": {
       "path": "experiments/v1_baseline",
@@ -32,6 +32,67 @@
       "max_dd_pct": null,
       "win_rate": null,
       "total_trades": null
+    },
+    "v5_anti_cheat": {
+      "path": "experiments/v5_anti_cheat",
+      "status": "completed",
+      "created": "2026-01-27",
+      "parent": "v4_prevent_lookahead",
+      "description": "Enhanced anti-exploitation: TRAIL_BE masking until bar 1, true breakeven (0 buffer), min profit for TRAIL",
+      "changes": [
+        "min_trail_bar: 1 (TRAIL_BE blocked until bar 1)",
+        "breakeven_buffer_pct: 0.0 (true breakeven, no free money)",
+        "min_profit_for_trail: 0.0002 (~2 pips required)"
+      ],
+      "sharpe": 7.02,
+      "return_pct": null,
+      "max_dd_pct": null,
+      "win_rate": 72.2,
+      "total_trades": 1326,
+      "notes": "High Sharpe may indicate gaming - 71.6% breakeven exits"
+    },
+    "v6_anti_gaming": {
+      "path": "experiments/v6_anti_gaming",
+      "status": "completed",
+      "created": "2026-01-28",
+      "parent": "v5_anti_cheat",
+      "description": "Fix V5 breakeven farming with asymmetric rewards, MFE decay penalty, and tighten cooldown",
+      "changes": [
+        "NEW: recovery_bonus=0.2 (reward scratch after loss)",
+        "NEW: giveback_penalty=0.3 (penalize scratch after profit)",
+        "NEW: breakeven_band=0.001 (10 pips)",
+        "NEW: mfe_decay_coef=0.4 (penalize MFE giveback)",
+        "NEW: min_mfe_for_decay=0.001 (10 pips)",
+        "NEW: tighten_cooldown=2 bars",
+        "INCREASED: regret_coef=0.5 (was 0.4)",
+        "INCREASED: min_exit_bar=2 (was 1)",
+        "INCREASED: min_trail_bar=2 (was 1)",
+        "INCREASED: min_profit_for_trail=0.0005 (~5 pips vs 2 pips)"
+      ],
+      "targets": {
+        "giveback_rate": "<40% (V5 had 71.6%)",
+        "profit_rate": ">20% (V5 had 0.2%)",
+        "avg_hold_time": "8-15 bars (V5 had 5.2)",
+        "tighten_usage": "30-40% (V5 had 47.9%)"
+      },
+      "results_oos_2022_2025": {
+        "giveback_rate": 14.7,
+        "profit_rate": 26.4,
+        "avg_hold_time": 16.1,
+        "tighten_usage": 0.0,
+        "sharpe": 3.32,
+        "return_pct": 56.24,
+        "win_rate": 49.4,
+        "profit_factor": 1.85,
+        "max_dd_pct": 1.97,
+        "improvement_vs_classical": 661.7
+      },
+      "sharpe": 3.32,
+      "return_pct": 56.24,
+      "max_dd_pct": 1.97,
+      "win_rate": 49.4,
+      "total_trades": 1326,
+      "notes": "Successfully fixed V5 breakeven farming. Giveback rate reduced from 71.6% to 14.7%, profit exits increased from 0.2% to 26.4%."
     }
   }
 }
